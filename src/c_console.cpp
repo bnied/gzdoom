@@ -561,6 +561,11 @@ int PrintString (int printlevel, const char *outline)
 			maybedrawnow (false, false);
 		}
 	}
+	else if (Logfile != NULL)
+	{
+		fputs (outline, Logfile);
+		fflush (Logfile);
+	}
 	return (int)strlen (outline);
 }
 
@@ -851,11 +856,10 @@ void C_DrawConsole (bool hw2d)
 	}
 	else if (ConBottom)
 	{
-		int visheight, realheight;
+		int visheight;
 		FTexture *conpic = TexMan[conback];
 
 		visheight = ConBottom;
-		realheight = (visheight * conpic->GetHeight()) / SCREENHEIGHT;
 
 		screen->DrawTexture (conpic, 0, visheight - screen->GetHeight(),
 			DTA_DestWidth, screen->GetWidth(),
@@ -1421,7 +1425,11 @@ static bool C_HandleKey (event_t *ev, BYTE *buffer, int len)
 		case 'V':
 			TabbedLast = false;
 			TabbedList = false;
+#ifdef __APPLE__
+			if (ev->data3 & GKM_META)
+#else // !__APPLE__
 			if (ev->data3 & GKM_CTRL)
+#endif // __APPLE__
 			{
 				if (data1 == 'C')
 				{ // copy to clipboard
@@ -1545,13 +1553,6 @@ void C_MidPrint (FFont *font, const char *msg)
 		AddToConsole (-1, bar1);
 		AddToConsole (-1, msg);
 		AddToConsole (-1, bar3);
-		if (Logfile)
-		{
-			fputs (logbar, Logfile);
-			fputs (msg, Logfile);
-			fputs (logbar, Logfile);
-			fflush (Logfile);
-		}
 
 		StatusBar->AttachMessage (new DHUDMessage (font, msg, 1.5f, 0.375f, 0, 0,
 			(EColorRange)PrintColors[PRINTLEVELS], con_midtime), MAKE_ID('C','N','T','R'));
@@ -1569,13 +1570,6 @@ void C_MidPrintBold (FFont *font, const char *msg)
 		AddToConsole (-1, bar2);
 		AddToConsole (-1, msg);
 		AddToConsole (-1, bar3);
-		if (Logfile)
-		{
-			fputs (logbar, Logfile);
-			fputs (msg, Logfile);
-			fputs (logbar, Logfile);
-			fflush (Logfile);
-		}
 
 		StatusBar->AttachMessage (new DHUDMessage (font, msg, 1.5f, 0.375f, 0, 0,
 			(EColorRange)PrintColors[PRINTLEVELS+1], con_midtime), MAKE_ID('C','N','T','R'));

@@ -633,8 +633,7 @@ void GLSkyboxPortal::DrawContents()
 
 	PlaneMirrorMode=0;
 
-	glDisable(GL_DEPTH_CLAMP);
-
+	bool oldclamp = gl_RenderState.SetDepthClamp(false);
 	viewx = origin->PrevX + FixedMul(r_TicFrac, origin->x - origin->PrevX);
 	viewy = origin->PrevY + FixedMul(r_TicFrac, origin->y - origin->PrevY);
 	viewz = origin->PrevZ + FixedMul(r_TicFrac, origin->z - origin->PrevZ);
@@ -663,7 +662,7 @@ void GLSkyboxPortal::DrawContents()
 	GLRenderer->DrawScene();
 	origin->flags&=~MF_JUSTHIT;
 	inskybox=false;
-	glEnable(GL_DEPTH_CLAMP);
+	gl_RenderState.SetDepthClamp(oldclamp);
 	skyboxrecursion--;
 
 	PlaneMirrorMode=old_pm;
@@ -801,7 +800,7 @@ void GLPlaneMirrorPortal::DrawContents()
 	float f = FIXED2FLOAT(planez);
 	if (PlaneMirrorMode < 0)
 	{
-		gl_RenderState.SetClipHeightTop(f);	// ceiling mirror: clip everytihng with a z lower than the portal's ceiling
+		gl_RenderState.SetClipHeightTop(f);	// ceiling mirror: clip everything with a z lower than the portal's ceiling
 		glEnable(GL_CLIP_DISTANCE1);
 	}
 	else

@@ -557,8 +557,25 @@ void R_RenderFakeWall(drawseg_t *ds, int x1, int x2, F3DFloor *rover)
 	MaskedSWall = (fixed_t *)(openings + ds->swall) - ds->x1;
 
 	// find positioning
-	xscale = FixedMul(rw_pic->xScale, sidedef->GetTextureXScale(side_t::mid));
-	yscale = FixedMul(rw_pic->yScale, sidedef->GetTextureYScale(side_t::mid));
+	side_t *scaledside;
+	side_t::ETexpart scaledpart;
+	if (rover->flags & FF_UPPERTEXTURE)
+	{
+		scaledside = curline->sidedef;
+		scaledpart = side_t::top;
+	}
+	else if (rover->flags & FF_LOWERTEXTURE)
+	{
+		scaledside = curline->sidedef;
+		scaledpart = side_t::bottom;
+	}
+	else
+	{
+		scaledside = rover->master->sidedef[0];
+		scaledpart = side_t::mid;
+	}
+	xscale = FixedMul(rw_pic->xScale, scaledside->GetTextureXScale(scaledpart));
+	yscale = FixedMul(rw_pic->yScale, scaledside->GetTextureYScale(scaledpart));
 	// encapsulate the lifetime of rowoffset
 	fixed_t rowoffset = curline->sidedef->GetTextureYOffset(side_t::mid) + rover->master->sidedef[0]->GetTextureYOffset(side_t::mid);
 	dc_texturemid = rover->model->GetPlaneTexZ(sector_t::ceiling);
@@ -2893,6 +2910,8 @@ void PrepWall (fixed_t *swall, fixed_t *lwall, fixed_t walxrepeat, int x1, int x
 { // swall = scale, lwall = texturecolumn
 	double top, bot, i;
 	double xrepeat = fabs((double)walxrepeat);
+	double depth_scale = WallT.InvZstep * WallTMapScale2;
+	double depth_org = -WallT.UoverZstep * WallTMapScale2;
 
 	i = x1 - centerx;
 	top = WallT.UoverZorg + WallT.UoverZstep * i;
@@ -2909,7 +2928,7 @@ void PrepWall (fixed_t *swall, fixed_t *lwall, fixed_t walxrepeat, int x1, int x
 		{
 			lwall[x] = xs_RoundToInt(frac * xrepeat);
 		}
-		swall[x] = xs_RoundToInt(frac * WallT.DepthScale + WallT.DepthOrg);
+		swall[x] = xs_RoundToInt(frac * depth_scale + depth_org);
 		top += WallT.UoverZstep;
 		bot += WallT.InvZstep;
 	}

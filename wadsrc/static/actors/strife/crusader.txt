@@ -1,10 +1,8 @@
 
 // Crusader -----------------------------------------------------------------
 
-ACTOR Crusader 3005
+ACTOR Crusader
 {
-	Game Strife
-	ConversationID 63,-1,-1
 	Speed 8
 	Radius 40
 	Height 56
@@ -99,7 +97,7 @@ ACTOR CrusaderMissile
 		Loop
 	Death:
 		SMIS A 0 Bright A_SetTranslucent(1,1)
-		SMIS A 5 Bright A_StopSoundEx("Voice")
+		SMIS A 5 Bright
 		SMIS B 5 Bright
 		SMIS C 4 Bright
 		SMIS DEFG 2 Bright
@@ -110,10 +108,8 @@ ACTOR CrusaderMissile
 
 // Dead Crusader ------------------------------------------------------------
 
-ACTOR DeadCrusader 22
+ACTOR DeadCrusader
 {
-	Game Strife 
-	ConversationID 230
 	States
 	{
 	Spawn:

@@ -109,6 +109,7 @@ enum SAW_Flags
 	SF_NOUSEAMMO = 16,
 	SF_NOPULLIN = 32,
 	SF_NOTURN = 64,
+	SF_STEALARMOR = 128,
 };
 
 DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Saw)
@@ -119,7 +120,7 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Saw)
 	AActor *linetarget;
 	int actualdamage;
 
-	ACTION_PARAM_START(9);
+	ACTION_PARAM_START(11);
 	ACTION_PARAM_SOUND(fullsound, 0);
 	ACTION_PARAM_SOUND(hitsound, 1);
 	ACTION_PARAM_INT(damage, 2);
@@ -129,6 +130,8 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Saw)
 	ACTION_PARAM_ANGLE(Spread_XY, 6);
 	ACTION_PARAM_ANGLE(Spread_Z, 7);
 	ACTION_PARAM_FIXED(LifeSteal, 8);
+	ACTION_PARAM_INT(lifestealmax, 9);
+	ACTION_PARAM_CLASS(armorbonustype, 10);
 
 	if (NULL == (player = self->player))
 	{
@@ -184,7 +187,31 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_Saw)
 	}
 
 	if (LifeSteal && !(linetarget->flags5 & MF5_DONTDRAIN))
-		P_GiveBody (self, (actualdamage * LifeSteal) >> FRACBITS);
+	{
+		if (Flags & SF_STEALARMOR)
+		{
+			if (!armorbonustype) armorbonustype = PClass::FindClass("ArmorBonus");
+
+			if (armorbonustype->IsDescendantOf (RUNTIME_CLASS(ABasicArmorBonus)))
+			{
+				ABasicArmorBonus *armorbonus = static_cast<ABasicArmorBonus *>(Spawn (armorbonustype, 0,0,0, NO_REPLACE));
+				armorbonus->SaveAmount *= (actualdamage * LifeSteal) >> FRACBITS;
+				armorbonus->MaxSaveAmount = lifestealmax <= 0 ? armorbonus->MaxSaveAmount : lifestealmax;
+				armorbonus->flags |= MF_DROPPED;
+				armorbonus->ClearCounters();
+
+				if (!armorbonus->CallTryPickup (self))
+				{
+					armorbonus->Destroy ();
+				}
+			}
+		}
+
+		else
+		{
+			P_GiveBody (self, (actualdamage * LifeSteal) >> FRACBITS, lifestealmax);
+		}
+	}
 
 	S_Sound (self, CHAN_WEAPON, hitsound, 1, ATTN_NORM);
 		
@@ -557,7 +584,6 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_BFGSpray)
 	int 				j;
 	int 				damage;
 	angle_t 			an;
-	AActor				*thingToHit;
 	AActor				*linetarget;
 
 	ACTION_PARAM_START(7);
@@ -583,36 +609,47 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_BFGSpray)
 	// offset angles from its attack angle
 	for (i = 0; i < numrays; i++)
 	{
-		an = self->angle - angle/2 + angle/numrays*i;
+		an = self->angle - angle / 2 + angle / numrays*i;
 
 		// self->target is the originator (player) of the missile
-		P_AimLineAttack (self->target, an, distance, &linetarget, vrange);
+		P_AimLineAttack(self->target, an, distance, &linetarget, vrange);
 
-		if (!linetarget)
-			continue;
-
-		AActor *spray = Spawn (spraytype, linetarget->x, linetarget->y,
-			linetarget->z + (linetarget->height>>2), ALLOW_REPLACE);
-
-		if (spray && (spray->flags5 & MF5_PUFFGETSOWNER))
-			spray->target = self->target;
-
-		if (defdamage == 0)
+		if (linetarget != NULL)
 		{
-			damage = 0;
-			for (j = 0; j < damagecnt; ++j)
-				damage += (pr_bfgspray() & 7) + 1;
-		}
-		else
-		{
-			// if this is used, damagecnt will be ignored
-			damage = defdamage;
-		}
+			AActor *spray = Spawn(spraytype, linetarget->x, linetarget->y,
+				linetarget->z + (linetarget->height >> 2), ALLOW_REPLACE);
 
-		thingToHit = linetarget;
-		int newdam = P_DamageMobj (thingToHit, self->target, self->target, damage, spray != NULL? FName(spray->DamageType) : FName(NAME_BFGSplash), 
-			spray != NULL && (spray->flags3 & MF3_FOILINVUL)? DMG_FOILINVUL : 0);
-		P_TraceBleed (newdam > 0 ? newdam : damage, thingToHit, self->target);
+			int dmgFlags = 0;
+			FName dmgType = NAME_BFGSplash;
+
+			if (spray != NULL)
+			{
+				if (spray->flags6 & MF6_MTHRUSPECIES && self->target->GetSpecies() == linetarget->GetSpecies())
+				{
+					spray->Destroy(); // [MC] Remove it because technically, the spray isn't trying to "hit" them.
+					continue;
+				}
+				if (spray->flags5 & MF5_PUFFGETSOWNER) spray->target = self->target;
+				if (spray->flags3 & MF3_FOILINVUL) dmgFlags |= DMG_FOILINVUL;
+				if (spray->flags7 & MF7_FOILBUDDHA) dmgFlags |= DMG_FOILBUDDHA;
+				dmgType = spray->DamageType;
+			}
+
+			if (defdamage == 0)
+			{
+				damage = 0;
+				for (j = 0; j < damagecnt; ++j)
+					damage += (pr_bfgspray() & 7) + 1;
+			}
+			else
+			{
+				// if this is used, damagecnt will be ignored
+				damage = defdamage;
+			}
+
+			int newdam = P_DamageMobj(linetarget, self->target, self->target, damage, dmgType, dmgFlags);
+			P_TraceBleed(newdam > 0 ? newdam : damage, linetarget, self->target);
+		}
 	}
 }
 

@@ -74,19 +74,22 @@ void ATeleportFog::PostBeginPlay ()
 //
 //==========================================================================
 
-void P_SpawnTeleportFog(fixed_t x, fixed_t y, fixed_t z, int spawnid)
+void P_SpawnTeleportFog(AActor *mobj, fixed_t x, fixed_t y, fixed_t z, bool beforeTele, bool setTarget)
 {
-	const PClass *fog = P_GetSpawnableType(spawnid);
-
-	if (fog == NULL)
+	AActor *mo;
+	if ((beforeTele ? mobj->TeleFogSourceType : mobj->TeleFogDestType) == NULL)
 	{
-		AActor *mo = Spawn ("TeleportFog", x, y, z + TELEFOGHEIGHT, ALLOW_REPLACE);
+		//Do nothing.
+		mo = NULL;
 	}
 	else
 	{
-		AActor *mo = Spawn (fog, x, y, z, ALLOW_REPLACE);
-		if (mo != NULL) S_Sound(mo, CHAN_BODY, mo->SeeSound, 1.f, ATTN_NORM);
+		mo = Spawn((beforeTele ? mobj->TeleFogSourceType : mobj->TeleFogDestType), x, y, z, ALLOW_REPLACE);
 	}
+
+	if (mo != NULL && setTarget)
+		mo->target = mobj;
+
 }
 
 //
@@ -185,9 +188,7 @@ bool P_Teleport (AActor *thing, fixed_t x, fixed_t y, fixed_t z, angle_t angle,
 	// Spawn teleport fog at source and destination
 	if (sourceFog && !predicting)
 	{
-		fixed_t fogDelta = thing->flags & MF_MISSILE ? 0 : TELEFOGHEIGHT;
-		AActor *fog = Spawn<ATeleportFog> (oldx, oldy, oldz + fogDelta, ALLOW_REPLACE);
-		fog->target = thing;
+		P_SpawnTeleportFog(thing, oldx, oldy, oldz, true, true); //Passes the actor through which then pulls the TeleFog metadata types based on properties.
 	}
 	if (useFog)
 	{
@@ -195,9 +196,8 @@ bool P_Teleport (AActor *thing, fixed_t x, fixed_t y, fixed_t z, angle_t angle,
 		{
 			fixed_t fogDelta = thing->flags & MF_MISSILE ? 0 : TELEFOGHEIGHT;
 			an = angle >> ANGLETOFINESHIFT;
-			AActor *fog = Spawn<ATeleportFog>(x + 20 * finecosine[an],
-				y + 20 * finesine[an], thing->z + fogDelta, ALLOW_REPLACE);
-			fog->target = thing;
+			P_SpawnTeleportFog(thing, x + 20 * finecosine[an], y + 20 * finesine[an], thing->z + fogDelta, false, true);
+
 		}
 		if (thing->player)
 		{
@@ -211,7 +211,7 @@ bool P_Teleport (AActor *thing, fixed_t x, fixed_t y, fixed_t z, angle_t angle,
 	if (thing->player && (useFog || !keepOrientation) && bHaltVelocity)
 	{
 		// Freeze player for about .5 sec
-		if (thing->Inventory == NULL || thing->Inventory->GetSpeedFactor() <= FRACUNIT)
+		if (thing->Inventory == NULL || !thing->Inventory->GetNoTeleportFreeze())
 			thing->reactiontime = 18;
 	}
 	if (thing->flags & MF_MISSILE)
@@ -250,7 +250,7 @@ static AActor *SelectTeleDest (int tid, int tag, bool norandom)
 		int count = 0;
 		while ( (searcher = iterator.Next ()) )
 		{
-			if (tag == 0 || searcher->Sector->tag == tag)
+			if (tag == 0 || tagManager.SectorHasTag(searcher->Sector, tag))
 			{
 				count++;
 			}
@@ -289,7 +289,7 @@ static AActor *SelectTeleDest (int tid, int tag, bool norandom)
 			while (count > 0)
 			{
 				searcher = iterator.Next ();
-				if (tag == 0 || searcher->Sector->tag == tag)
+				if (tag == 0 || tagManager.SectorHasTag(searcher->Sector, tag))
 				{
 					count--;
 				}
@@ -300,9 +300,10 @@ static AActor *SelectTeleDest (int tid, int tag, bool norandom)
 
 	if (tag != 0)
 	{
-		int secnum = -1;
+		int secnum;
 
-		while ((secnum = P_FindSectorFromTag (tag, secnum)) >= 0)
+		FSectorTagIterator itr(tag);
+		while ((secnum = itr.Next()) >= 0)
 		{
 			// Scanning the snext links of things in the sector will not work, because
 			// TeleportDests have MF_NOSECTOR set. So you have to search *everything*.
@@ -328,7 +329,6 @@ static AActor *SelectTeleDest (int tid, int tag, bool norandom)
 bool EV_Teleport (int tid, int tag, line_t *line, int side, AActor *thing, bool fog,
 				  bool sourceFog, bool keepOrientation, bool haltVelocity, bool keepHeight)
 {
-	bool predicting = (thing->player && (thing->player->cheats & CF_PREDICTING));
 
 	AActor *searcher;
 	fixed_t z;
@@ -341,6 +341,7 @@ bool EV_Teleport (int tid, int tag, line_t *line, int side, AActor *thing, bool 
 	{ // Teleport function called with an invalid actor
 		return false;
 	}
+	bool predicting = (thing->player && (thing->player->cheats & CF_PREDICTING));
 	if (thing->flags2 & MF2_NOTELEPORT)
 	{
 		return false;
@@ -423,7 +424,8 @@ bool EV_SilentLineTeleport (line_t *line, int side, AActor *thing, int id, INTBO
 	if (side || thing->flags2 & MF2_NOTELEPORT || !line || line->sidedef[1] == NULL)
 		return false;
 
-	for (i = -1; (i = P_FindLineFromID (id, i)) >= 0; )
+	FLineIdIterator itr(id);
+	while ((i = itr.Next()) >= 0)
 	{
 		if (line-lines == i)
 			continue;
@@ -726,7 +728,8 @@ bool EV_TeleportSector (int tag, int source_tid, int dest_tid, bool fog, int gro
 	int secnum;
 
 	secnum = -1;
-	while ((secnum = P_FindSectorFromTag (tag, secnum)) >= 0)
+	FSectorTagIterator itr(tag);
+	while ((secnum = itr.Next()) >= 0)
 	{
 		msecnode_t *node;
 		const sector_t * const sec = &sectors[secnum];

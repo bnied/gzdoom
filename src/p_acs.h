@@ -283,8 +283,9 @@ enum ACSFormat { ACS_Old, ACS_Enhanced, ACS_LittleEnhanced, ACS_Unknown };
 class FBehavior
 {
 public:
-	FBehavior (int lumpnum, FileReader * fr=NULL, int len=0);
+	FBehavior ();
 	~FBehavior ();
+	bool Init(int lumpnum, FileReader * fr = NULL, int len = 0);
 
 	bool IsGood ();
 	BYTE *FindChunk (DWORD id) const;
@@ -308,6 +309,7 @@ public:
 	int GetScriptIndex (const ScriptPtr *ptr) const { ptrdiff_t index = ptr - Scripts; return index >= NumScripts ? -1 : (int)index; }
 	ScriptPtr *GetScriptPtr(int index) const { return index >= 0 && index < NumScripts ? &Scripts[index] : NULL; }
 	int GetLumpNum() const { return LumpNum; }
+	int GetDataSize() const { return DataSize; }
 	const char *GetModuleName() const { return ModuleName; }
 	ACSProfileInfo *GetFunctionProfileData(int index) { return index >= 0 && index < NumFunctions ? &FunctionProfileData[index] : NULL; }
 	ACSProfileInfo *GetFunctionProfileData(ScriptFunction *func) { return GetFunctionProfileData((int)(func - (ScriptFunction *)Functions)); }

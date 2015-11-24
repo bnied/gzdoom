@@ -135,7 +135,9 @@ enum
 	IF_NEVERRESPAWN		= 1<<20,	// Never, ever respawns
 	IF_NOSCREENFLASH	= 1<<21,	// No pickup flash on the player's screen
 	IF_TOSSED			= 1<<22,	// Was spawned by P_DropItem (i.e. as a monster drop)
-
+	IF_ALWAYSRESPAWN	= 1<<23,	// Always respawn, regardless of dmflag
+	IF_TRANSFER			= 1<<24,	// All inventory items that the inventory item contains is also transfered to the pickuper
+	IF_NOTELEPORTFREEZE	= 1<<25,	// does not 'freeze' the player right after teleporting.
 };
 
 
@@ -150,6 +152,7 @@ public:
 	virtual void MarkPrecacheSounds() const;
 	virtual void BeginPlay ();
 	virtual void Destroy ();
+	virtual void DepleteOrDestroy ();
 	virtual void Tick ();
 	virtual bool ShouldRespawn ();
 	virtual bool ShouldStay ();
@@ -199,6 +202,7 @@ public:
 	virtual void AbsorbDamage (int damage, FName damageType, int &newdamage);
 	virtual void ModifyDamage (int damage, FName damageType, int &newdamage, bool passive);
 	virtual fixed_t GetSpeedFactor();
+	virtual bool GetNoTeleportFreeze();
 	virtual int AlterWeaponSprite (visstyle_t *vis);
 
 	virtual PalEntry GetBlend ();

@@ -26,6 +26,11 @@
 #include "gl/renderer/gl_renderer.h"
 #include "gl/system/gl_framebuffer.h"
 
+extern "C" {
+    _declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
+    __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;	
+}
+
 void gl_CalculateCPUSpeed();
 extern int NewWidth, NewHeight, NewBits, DisplayBits;
 
@@ -37,7 +42,7 @@ PFNWGLSWAPINTERVALEXTPROC vsyncfunc;
 
 CUSTOM_CVAR(Int, gl_vid_multisample, 0, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL )
 {
-	Printf("This won't take effect until "GAMENAME" is restarted.\n");
+	Printf("This won't take effect until " GAMENAME " is restarted.\n");
 }
 
 CVAR(Bool, gl_debug, false, 0)
@@ -259,6 +264,7 @@ void Win32GLVideo::AddMode(int x, int y, int bits, int baseHeight, int refreshHz
 	// not present, add it to the right spot in the list; otherwise, do nothing.
 	// Modes are sorted first by width, then by height, then by depth. In each
 	// case the order is ascending.
+	if (bits < 32) return;
 	for (; probe != 0; probep = &probe->next, probe = probe->next)
 	{
 		if (probe->width != x)		continue;
@@ -269,7 +275,7 @@ void Win32GLVideo::AddMode(int x, int y, int bits, int baseHeight, int refreshHz
 		// Height is equal
 		if (probe->bits != bits)	continue;
 		// Bits is equal
-		if (probe->refreshHz > refreshHz) continue;
+		if (probe->refreshHz > refreshHz) return;
 		probe->refreshHz = refreshHz;
 		return;
 	}

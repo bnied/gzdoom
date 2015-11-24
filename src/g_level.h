@@ -52,7 +52,7 @@ class FScanner;
 #define GCC_YSEG
 #else
 #define MSVC_YSEG
-#define GCC_YSEG __attribute__((section(SECTION_YREG)))
+#define GCC_YSEG __attribute__((section(SECTION_YREG))) __attribute__((used))
 #endif
 
 struct FIntermissionDescriptor;
@@ -104,6 +104,9 @@ struct FMapInfoParser
 
 	void ParseIntermissionAction(FIntermissionDescriptor *Desc);
 	void ParseIntermission();
+	void ParseDoomEdNums();
+	void ParseSpawnNums();
+	void ParseConversationIDs();
 	void ParseAMColors(bool);
 	FName CheckEndSequence();
 	FName ParseEndGame();
@@ -216,6 +219,9 @@ enum ELevelFlags
 	LEVEL2_ENDGAME				= 0x20000000,	// This is an epilogue level that cannot be quit.
 	LEVEL2_NOAUTOSAVEHINT		= 0x40000000,	// tell the game that an autosave for this level does not need to be kept
 	LEVEL2_FORGETSTATE			= 0x80000000,	// forget this map's state in a hub
+	
+	// More flags!
+	LEVEL3_FORCEFAKECONTRAST	= 0x00000001,	// forces fake contrast even with fog enabled
 };
 
 
@@ -285,6 +291,8 @@ struct level_info_t
 	int			sucktime;
 	DWORD		flags;
 	DWORD		flags2;
+	DWORD		flags3;
+
 	FString		Music;
 	FString		LevelName;
 	SBYTE		WallVertLight, WallHorizLight;
@@ -331,6 +339,7 @@ struct level_info_t
 	TArray<FSpecialAction> specialactions;
 
 	TArray<FSoundID> PrecacheSounds;
+	TArray<FTextureID> PrecacheTextures;
 
 	level_info_t() 
 	{ 
@@ -398,6 +407,7 @@ struct FLevelLocals
 
 	DWORD		flags;
 	DWORD		flags2;
+	DWORD		flags3;
 
 	DWORD		fadeto;					// The color the palette fades to (usually black)
 	DWORD		outsidefog;				// The fog for sectors with sky ceilings
@@ -406,7 +416,6 @@ struct FLevelLocals
 	int			musicorder;
 	int			cdtrack;
 	unsigned int cdid;
-	int			nextmusic;				// For MUSINFO purposes
 	FTextureID	skytexture1;
 	FTextureID	skytexture2;
 

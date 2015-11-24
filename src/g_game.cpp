@@ -76,6 +76,7 @@
 #include "d_net.h"
 #include "d_event.h"
 #include "p_acs.h"
+#include "p_effect.h"
 #include "m_joy.h"
 #include "farchive.h"
 #include "r_renderer.h"
@@ -115,6 +116,7 @@ CVAR (Bool, chasedemo, false, 0);
 CVAR (Bool, storesavepic, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (Bool, longsavemessages, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (String, save_dir, "", CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
+CVAR (Bool, cl_waitforsave, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG);
 EXTERN_CVAR (Float, con_midtime);
 
 //==========================================================================
@@ -140,6 +142,7 @@ gameaction_t	gameaction;
 gamestate_t 	gamestate = GS_STARTUP;
 
 int 			paused;
+bool			pauseext;
 bool 			sendpause;				// send a pause event next tic 
 bool			sendsave;				// send a save event next tic 
 bool			sendturn180;			// [RH] send a 180 degree turn next tic
@@ -161,6 +164,8 @@ int 			consoleplayer;			// player taking events
 int 			gametic;
 
 CVAR(Bool, demo_compress, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG);
+FString			newdemoname;
+FString			newdemomap;
 FString			demoname;
 bool 			demorecording;
 bool 			demoplayback;
@@ -874,7 +879,7 @@ static void ChangeSpy (int changespy)
 			pnum &= MAXPLAYERS-1;
 			if (playeringame[pnum] &&
 				(!checkTeam || players[pnum].mo->IsTeammate (players[consoleplayer].mo) ||
-				(bot_allowspy && players[pnum].isbot)))
+				(bot_allowspy && players[pnum].Bot != NULL)))
 			{
 				break;
 			}
@@ -1013,10 +1018,16 @@ void G_Ticker ()
 	// do player reborns if needed
 	for (i = 0; i < MAXPLAYERS; i++)
 	{
-		if (playeringame[i] &&
-			(players[i].playerstate == PST_REBORN || players[i].playerstate == PST_ENTER))
+		if (playeringame[i])
 		{
-			G_DoReborn (i, false);
+			if (players[i].playerstate == PST_GONE)
+			{
+				G_DoPlayerPop(i);
+			}
+			if (players[i].playerstate == PST_REBORN || players[i].playerstate == PST_ENTER)
+			{
+				G_DoReborn(i, false);
+			}
 		}
 	}
 
@@ -1041,6 +1052,10 @@ void G_Ticker ()
 		case ga_loadlevel:
 			G_DoLoadLevel (-1, false);
 			break;
+		case ga_recordgame:
+			G_CheckDemoStatus();
+			G_RecordDemo(newdemoname);
+			G_BeginRecording(newdemomap);
 		case ga_newgame2:	// Silence GCC (see above)
 		case ga_newgame:
 			G_DoNewGame ();
@@ -1114,6 +1129,9 @@ void G_Ticker ()
 	// check, not just the player's x position like BOOM.
 	DWORD rngsum = FRandom::StaticSumSeeds ();
 
+	//Added by MC: For some of that bot stuff. The main bot function.
+	bglobal.Main ();
+
 	for (i = 0; i < MAXPLAYERS; i++)
 	{
 		if (playeringame[i])
@@ -1133,13 +1151,13 @@ void G_Ticker ()
 			// If the user alt-tabbed away, paused gets set to -1. In this case,
 			// we do not want to read more demo commands until paused is no
 			// longer negative.
-			if (demoplayback && paused >= 0)
+			if (demoplayback)
 			{
 				G_ReadDemoTiccmd (cmd, i);
 			}
 			else
 			{
-				memcpy (cmd, newcmd, sizeof(ticcmd_t));
+				memcpy(cmd, newcmd, sizeof(ticcmd_t));
 			}
 
 			// check for turbo cheats
@@ -1149,7 +1167,7 @@ void G_Ticker ()
 				Printf ("%s is turbo!\n", players[i].userinfo.GetName());
 			}
 
-			if (netgame && !players[i].isbot && !demoplayback && (gametic%ticdup) == 0)
+			if (netgame && players[i].Bot == NULL && !demoplayback && (gametic%ticdup) == 0)
 			{
 				//players[i].inconsistant = 0;
 				if (gametic > BACKUPTICS*ticdup && consistancy[i][buf] != cmd->consistancy)
@@ -1331,10 +1349,10 @@ void G_PlayerReborn (int player)
 	int			chasecam;
 	BYTE		currclass;
 	userinfo_t  userinfo;	// [RH] Save userinfo
-	botskill_t  b_skill;	//Added by MC:
 	APlayerPawn *actor;
 	const PClass *cls;
 	FString		log;
+	DBot		*Bot;		//Added by MC:
 
 	p = &players[player];
 
@@ -1344,18 +1362,19 @@ void G_PlayerReborn (int player)
 	itemcount = p->itemcount;
 	secretcount = p->secretcount;
 	currclass = p->CurrentPlayerClass;
-    b_skill = p->skill;    //Added by MC:
 	userinfo.TransferFrom(p->userinfo);
 	actor = p->mo;
 	cls = p->cls;
 	log = p->LogText;
 	chasecam = p->cheats & CF_CHASECAM;
+	Bot = p->Bot;			//Added by MC:
 
 	// Reset player structure to its defaults
 	p->~player_t();
 	::new(p) player_t;
 
 	memcpy (p->frags, frags, sizeof(p->frags));
+	p->health = actor->health;
 	p->fragcount = fragcount;
 	p->killcount = killcount;
 	p->itemcount = itemcount;
@@ -1366,8 +1385,7 @@ void G_PlayerReborn (int player)
 	p->cls = cls;
 	p->LogText = log;
 	p->cheats |= chasecam;
-
-    p->skill = b_skill;	//Added by MC:
+	p->Bot = Bot;			//Added by MC:
 
 	p->oldbuttons = ~0, p->attackdown = true; p->usedown = true;	// don't do anything immediately
 	p->original_oldbuttons = ~0;
@@ -1375,15 +1393,19 @@ void G_PlayerReborn (int player)
 
 	if (gamestate != GS_TITLELEVEL)
 	{
+		// [GRB] Give inventory specified in DECORATE
 		actor->GiveDefaultInventory ();
 		p->ReadyWeapon = p->PendingWeapon;
 	}
 
-    //Added by MC: Init bot structure.
-    if (bglobal.botingame[player])
-        bglobal.CleanBotstuff (p);
-    else
-		p->isbot = false;
+	//Added by MC: Init bot structure.
+	if (p->Bot != NULL)
+	{
+		botskill_t skill = p->Bot->skill;
+		p->Bot->Clear ();
+		p->Bot->player = p;
+		p->Bot->skill = skill;
+	}
 }
 
 //
@@ -1658,6 +1680,56 @@ void G_DoReborn (int playernum, bool freshbot)
 	}
 }
 
+//
+// G_DoReborn
+//
+void G_DoPlayerPop(int playernum)
+{
+	playeringame[playernum] = false;
+
+	if (deathmatch)
+	{
+		Printf("%s left the game with %d frags\n",
+			players[playernum].userinfo.GetName(),
+			players[playernum].fragcount);
+	}
+	else
+	{
+		Printf("%s left the game\n", players[playernum].userinfo.GetName());
+	}
+
+	// [RH] Revert each player to their own view if spying through the player who left
+	for (int ii = 0; ii < MAXPLAYERS; ++ii)
+	{
+		if (playeringame[ii] && players[ii].camera == players[playernum].mo)
+		{
+			players[ii].camera = players[ii].mo;
+			if (ii == consoleplayer && StatusBar != NULL)
+			{
+				StatusBar->AttachToPlayer(&players[ii]);
+			}
+		}
+	}
+
+	// [RH] Make the player disappear
+	FBehavior::StaticStopMyScripts(players[playernum].mo);
+	if (players[playernum].mo != NULL)
+	{
+		P_DisconnectEffect(players[playernum].mo);
+		players[playernum].mo->player = NULL;
+		players[playernum].mo->Destroy();
+		if (!(players[playernum].mo->ObjectFlags & OF_EuthanizeMe))
+		{ // We just destroyed a morphed player, so now the original player
+			// has taken their place. Destroy that one too.
+			players[playernum].mo->Destroy();
+		}
+		players[playernum].mo = NULL;
+		players[playernum].camera = NULL;
+	}
+	// [RH] Let the scripts know the player left
+	FBehavior::StaticStartTypedScripts(SCRIPT_Disconnect, NULL, true, playernum);
+}
+
 void G_ScreenShot (char *filename)
 {
 	shotfile = filename;
@@ -1911,10 +1983,25 @@ void G_SaveGame (const char *filename, const char *description)
 		Printf ("A game save is still pending.\n");
 		return;
 	}
-	savegamefile = filename;
-	strncpy (savedescription, description, sizeof(savedescription)-1);
-	savedescription[sizeof(savedescription)-1] = '\0';
-	sendsave = true;
+    else if (!usergame)
+	{
+        Printf ("not in a saveable game\n");
+    }
+    else if (gamestate != GS_LEVEL)
+	{
+        Printf ("not in a level\n");
+    }
+    else if (players[consoleplayer].health <= 0 && !multiplayer)
+    {
+        Printf ("player is dead in a single-player game\n");
+    }
+	else
+	{
+		savegamefile = filename;
+		strncpy (savedescription, description, sizeof(savedescription)-1);
+		savedescription[sizeof(savedescription)-1] = '\0';
+		sendsave = true;
+	}
 }
 
 FString G_BuildSaveName (const char *prefix, int slot)
@@ -2066,7 +2153,7 @@ void G_DoSaveGame (bool okForQuicksave, FString filename, const char *descriptio
 
 	// Do not even try, if we're not in a level. (Can happen after
 	// a demo finishes playback.)
-	if (lines == NULL || sectors == NULL)
+	if (lines == NULL || sectors == NULL || gamestate != GS_LEVEL)
 	{
 		return;
 	}
@@ -2075,6 +2162,9 @@ void G_DoSaveGame (bool okForQuicksave, FString filename, const char *descriptio
 	{
 		filename = G_BuildSaveName ("demosave.zds", -1);
 	}
+
+	if (cl_waitforsave)
+		I_FreezeTime(true);
 
 	insave = true;
 	G_SnapshotLevel ();
@@ -2085,6 +2175,7 @@ void G_DoSaveGame (bool okForQuicksave, FString filename, const char *descriptio
 	{
 		Printf ("Could not create savegame '%s'\n", filename.GetChars());
 		insave = false;
+		I_FreezeTime(false);
 		return;
 	}
 
@@ -2161,6 +2252,7 @@ void G_DoSaveGame (bool okForQuicksave, FString filename, const char *descriptio
 	}
 		
 	insave = false;
+	I_FreezeTime(false);
 }
 
 
@@ -2373,6 +2465,16 @@ void G_DeferedPlayDemo (const char *name)
 
 CCMD (playdemo)
 {
+	if (netgame)
+	{
+		Printf("End your current netgame first!");
+		return;
+	}
+	if (demorecording)
+	{
+		Printf("End your current demo first!");
+		return;
+	}
 	if (argv.argc() > 1)
 	{
 		G_DeferedPlayDemo (argv[1]);
@@ -2414,7 +2516,7 @@ bool G_ProcessIFFDemo (FString &mapname)
 	id = ReadLong (&demo_p);
 	if (id != ZDEM_ID)
 	{
-		Printf ("Not a ZDoom demo file!\n");
+		Printf ("Not a " GAMENAME " demo file!\n");
 		return true;
 	}
 
@@ -2439,12 +2541,12 @@ bool G_ProcessIFFDemo (FString &mapname)
 			demover = ReadWord (&demo_p);	// ZDoom version demo was created with
 			if (demover < MINDEMOVERSION)
 			{
-				Printf ("Demo requires an older version of ZDoom!\n");
+				Printf ("Demo requires an older version of " GAMENAME "!\n");
 				//return true;
 			}
 			if (ReadWord (&demo_p) > DEMOGAMEVERSION)	// Minimum ZDoom version
 			{
-				Printf ("Demo requires a newer version of ZDoom!\n");
+				Printf ("Demo requires a newer version of " GAMENAME "!\n");
 				return true;
 			}
 			if (demover >= 0x21a)
@@ -2502,6 +2604,12 @@ bool G_ProcessIFFDemo (FString &mapname)
 			demo_p = nextchunk;
 	}
 
+	if (!headerHit)
+	{
+		Printf ("Demo has no header!\n");
+		return true;
+	}
+
 	if (!numPlayers)
 	{
 		Printf ("Demo has no players!\n");
@@ -2555,7 +2663,7 @@ void G_DoPlayDemo (void)
 	{
 		FixPathSeperator (defdemoname);
 		DefaultExtension (defdemoname, ".lmp");
-		M_ReadFile (defdemoname, &demobuffer);
+		M_ReadFileMalloc (defdemoname, &demobuffer);
 	}
 	demo_p = demobuffer;
 
@@ -2565,7 +2673,7 @@ void G_DoPlayDemo (void)
 
 	if (ReadLong (&demo_p) != FORM_ID)
 	{
-		const char *eek = "Cannot play non-ZDoom demos.\n";
+		const char *eek = "Cannot play non-" GAMENAME " demos.\n";
 
 		C_ForgetCVars();
 		M_Free(demobuffer);

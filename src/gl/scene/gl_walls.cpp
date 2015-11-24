@@ -606,8 +606,8 @@ bool GLWall::SetWallCoordinates(seg_t * seg, FTexCoordInfo *tci, float textureto
 	if (topright >= bottomright)
 	{
 		// normal case
-		ztop[1]=FIXED2FLOAT(topright)		;
-		zbottom[1]=FIXED2FLOAT(bottomright)		;
+		ztop[1]=FIXED2FLOAT(topright);
+		zbottom[1]=FIXED2FLOAT(bottomright);
 
 		if (tci)
 		{
@@ -640,17 +640,25 @@ bool GLWall::SetWallCoordinates(seg_t * seg, FTexCoordInfo *tci, float textureto
 	uplft.u = lolft.u = l_ul + texlength * glseg.fracleft;
 	uprgt.u = lorgt.u = l_ul + texlength * glseg.fracright;
 
-
-	if (gltexture && gltexture->tex->bHasCanvas && flags&GLT_CLAMPY)
+	if (gltexture != NULL)
 	{
-		// Camera textures are upside down so we have to shift the y-coordinate
-		// from [-1..0] to [0..1] when using texture clamping
-
-		uplft.v+=1.f;
-		uprgt.v+=1.f;
-		lolft.v+=1.f;
-		lorgt.v+=1.f;
+		bool normalize = false;
+		if (gltexture->tex->bHasCanvas) normalize = true;
+		else if (flags & GLT_CLAMPY)
+		{
+			// for negative scales we can get negative coordinates here.
+			normalize = (uplft.v > lolft.v || uprgt.v > lorgt.v);
+		}
+		if (normalize)
+		{
+			// we have to shift the y-coordinate from [-1..0] to [0..1] when using texture clamping with a negative scale
+			uplft.v+=1.f;
+			uprgt.v+=1.f;
+			lolft.v+=1.f;
+			lorgt.v+=1.f;
+		}
 	}
+	
 	return true;
 }
 
@@ -778,12 +786,12 @@ void GLWall::DoMidTexture(seg_t * seg, bool drawfogboundary,
 		if ( (seg->linedef->flags & ML_DONTPEGBOTTOM) >0)
 		{
 			texturebottom = MAX(realfront->GetPlaneTexZ(sector_t::floor),realback->GetPlaneTexZ(sector_t::floor))+rowoffset;
-			texturetop=texturebottom+(gltexture->TextureHeight()<<FRACBITS);
+			texturetop=texturebottom+(tci.mRenderHeight << FRACBITS);
 		}
 		else
 		{
 			texturetop = MIN(realfront->GetPlaneTexZ(sector_t::ceiling),realback->GetPlaneTexZ(sector_t::ceiling))+rowoffset;
-			texturebottom=texturetop-(gltexture->TextureHeight()<<FRACBITS);
+			texturebottom=texturetop-(tci.mRenderHeight << FRACBITS);
 		}
 	}
 	else texturetop=texturebottom=0;
@@ -910,10 +918,10 @@ void GLWall::DoMidTexture(seg_t * seg, bool drawfogboundary,
 		fixed_t textureoffset = tci.TextureOffset(t_ofs);
 		int righttex=(textureoffset>>FRACBITS)+seg->sidedef->TexelLength;
 		
-		if ((textureoffset==0 && righttex<=gltexture->TextureWidth()) || 
-			(textureoffset>=0 && righttex==gltexture->TextureWidth()))
+		if ((textureoffset == 0 && righttex <= tci.mRenderWidth) ||
+			(textureoffset >= 0 && righttex == tci.mRenderWidth))
 		{
-			flags|=GLT_CLAMPX;
+			flags |= GLT_CLAMPX;
 		}
 		else
 		{
@@ -1412,7 +1420,7 @@ void GLWall::Process(seg_t *seg, sector_t * frontsector, sector_t * backsector)
 	sector_t * realback;
 
 #ifdef _DEBUG
-	if (seg->linedef-lines==1276)
+	if (seg->linedef-lines==4)
 	{
 		int a = 0;
 	}
@@ -1631,7 +1639,7 @@ void GLWall::Process(seg_t *seg, sector_t * frontsector, sector_t * backsector)
 				else if (!(seg->sidedef->Flags & WALLF_POLYOBJ))
 				{
 					// skip processing if the back is a malformed subsector
-					if (!(seg->PartnerSeg->Subsector->hacked & 4))
+					if (seg->PartnerSeg != NULL && !(seg->PartnerSeg->Subsector->hacked & 4))
 					{
 						gl_drawinfo->AddUpperMissingTexture(seg->sidedef, sub, bch1a);
 					}
@@ -1704,7 +1712,7 @@ void GLWall::Process(seg_t *seg, sector_t * frontsector, sector_t * backsector)
 				!(seg->sidedef->Flags & WALLF_POLYOBJ))
 			{
 				// skip processing if the back is a malformed subsector
-				if (!(seg->PartnerSeg->Subsector->hacked & 4))
+				if (seg->PartnerSeg != NULL && !(seg->PartnerSeg->Subsector->hacked & 4))
 				{
 					gl_drawinfo->AddLowerMissingTexture(seg->sidedef, sub, bfh1);
 				}

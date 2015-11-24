@@ -87,6 +87,7 @@ struct FAnimDef
 	WORD	NumFrames;
 	WORD	CurFrame;
 	BYTE	AnimType;
+	bool	bDiscrete;			// taken out of AnimType to have better control
 	DWORD	SwitchTime;			// Time to advance to next frame
 	struct FAnimFrame
 	{
@@ -100,7 +101,7 @@ struct FAnimDef
 		ANIM_Backward,
 		ANIM_OscillateUp,
 		ANIM_OscillateDown,
-		ANIM_DiscreteFrames
+		ANIM_Random
 	};
 
 	void SetSwitchTime (DWORD mstime);
@@ -256,6 +257,7 @@ public:
 
 	int GetScaledWidth () { int foo = (Width << 17) / xScale; return (foo >> 1) + (foo & 1); }
 	int GetScaledHeight () { int foo = (Height << 17) / yScale; return (foo >> 1) + (foo & 1); }
+	int GetScaledHeight(fixed_t scale) { int foo = (Height << 17) / scale; return (foo >> 1) + (foo & 1); }
 	double GetScaledWidthDouble () { return (Width * 65536.) / xScale; }
 	double GetScaledHeightDouble () { return (Height * 65536.) / yScale; }
 
@@ -347,10 +349,10 @@ public:
 		bool bSkybox:1;							// This is a skybox
 		bool bSkyColorDone:1;					// Fill color for sky
 		char bBrightmapChecked:1;				// Set to 1 if brightmap has been checked
-		bool bBrightmap:1;						// This is a brightmap
-		bool bBrightmapDisablesFullbright:1;	// This disables fullbright display
+		bool bDisableFullbright:1;				// This texture will not be displayed as fullbright sprite
 		bool bNoFilter:1;
 		bool bNoCompress:1;
+		bool bNoExpand:1;
 
 		MiscGLInfo() throw ();
 		~MiscGLInfo();
@@ -432,6 +434,16 @@ public:
 		TEXMAN_DontCreate = 32
 	};
 
+	enum
+	{
+		HIT_Wall = 1,
+		HIT_Flat = 2,
+		HIT_Sky = 4,
+		HIT_Sprite = 8,
+
+		HIT_Columnmode = HIT_Wall|HIT_Sky|HIT_Sprite
+	};
+
 	FTextureID CheckForTexture (const char *name, int usetype, BITFIELD flags=TEXMAN_TryAny);
 	FTextureID GetTexture (const char *name, int usetype, BITFIELD flags=0);
 	int ListTextures (const char *name, TArray<FTextureID> &list);
@@ -493,14 +505,14 @@ private:
 	void InitBuildTiles ();
 
 	// Animation stuff
-	void AddAnim (FAnimDef *anim);
+	FAnimDef *AddAnim (FAnimDef *anim);
 	void FixAnimations ();
 	void InitAnimated ();
 	void InitAnimDefs ();
-	void AddSimpleAnim (FTextureID picnum, int animcount, int animtype, DWORD speedmin, DWORD speedrange=0);
-	void AddComplexAnim (FTextureID picnum, const TArray<FAnimDef::FAnimFrame> &frames);
+	FAnimDef *AddSimpleAnim (FTextureID picnum, int animcount, DWORD speedmin, DWORD speedrange=0);
+	FAnimDef *AddComplexAnim (FTextureID picnum, const TArray<FAnimDef::FAnimFrame> &frames);
 	void ParseAnim (FScanner &sc, int usetype);
-	void ParseRangeAnim (FScanner &sc, FTextureID picnum, int usetype, bool missing);
+	FAnimDef *ParseRangeAnim (FScanner &sc, FTextureID picnum, int usetype, bool missing);
 	void ParsePicAnim (FScanner &sc, FTextureID picnum, int usetype, bool missing, TArray<FAnimDef::FAnimFrame> &frames);
 	void ParseWarp(FScanner &sc);
 	void ParseCameraTexture(FScanner &sc);

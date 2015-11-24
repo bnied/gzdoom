@@ -499,7 +499,7 @@ bool AInventory::ShouldRespawn ()
 {
 	if ((ItemFlags & IF_BIGPOWERUP) && !(dmflags2 & DF2_RESPAWN_SUPER)) return false;
 	if (ItemFlags & IF_NEVERRESPAWN) return false;
-	return !!(dmflags & DF_ITEMS_RESPAWN);
+	return !!((dmflags & DF_ITEMS_RESPAWN) || (ItemFlags & IF_ALWAYSRESPAWN));
 }
 
 //===========================================================================
@@ -593,7 +593,7 @@ bool AInventory::HandlePickup (AInventory *item)
 {
 	if (item->GetClass() == GetClass())
 	{
-		if (Amount < MaxAmount || sv_unlimited_pickup)
+		if (Amount < MaxAmount || (sv_unlimited_pickup && !item->ShouldStay()))
 		{
 			if (Amount > 0 && Amount + item->Amount < 0)
 			{
@@ -852,6 +852,25 @@ fixed_t AInventory::GetSpeedFactor ()
 
 //===========================================================================
 //
+// AInventory :: GetNoTeleportFreeze
+//
+//===========================================================================
+
+bool AInventory::GetNoTeleportFreeze ()
+{
+	// do not check the flag here because it's only active when used on PowerUps, not on PowerupGivers.
+	if (Inventory != NULL)
+	{
+		return Inventory->GetNoTeleportFreeze();
+	}
+	else
+	{
+		return false;
+	}
+}
+
+//===========================================================================
+//
 // AInventory :: AlterWeaponSprite
 //
 // Allows inventory items to alter a player's weapon sprite just before it
@@ -1024,8 +1043,8 @@ void AInventory::Touch (AActor *toucher)
 	//Added by MC: Check if item taken was the roam destination of any bot
 	for (int i = 0; i < MAXPLAYERS; i++)
 	{
-		if (playeringame[i] && this == players[i].dest)
-    		players[i].dest = NULL;
+		if (players[i].Bot != NULL && this == players[i].Bot->dest)
+			players[i].Bot->dest = NULL;
 	}
 }
 
@@ -1129,6 +1148,32 @@ void AInventory::Destroy ()
 	// Although contrived it can theoretically happen that these variables still got a pointer to this item
 	if (SendItemUse == this) SendItemUse = NULL;
 	if (SendItemDrop == this) SendItemDrop = NULL;
+}
+
+//===========================================================================
+//
+// AInventory :: DepleteOrDestroy
+//
+// If the item is depleted, just change its amount to 0, otherwise it's destroyed.
+//
+//===========================================================================
+
+void AInventory::DepleteOrDestroy ()
+{
+	// If it's not ammo or an internal armor, destroy it.
+	// Ammo needs to stick around, even when it's zero for the benefit
+	// of the weapons that use it and to maintain the maximum ammo
+	// amounts a backpack might have given.
+	// Armor shouldn't be removed because they only work properly when
+	// they are the last items in the inventory.
+	if (ItemFlags & IF_KEEPDEPLETED)
+	{
+		Amount = 0;
+	}
+	else
+	{
+		Destroy();
+	}
 }
 
 //===========================================================================
@@ -1372,6 +1417,8 @@ bool AInventory::TryPickupRestricted (AActor *&toucher)
 
 bool AInventory::CallTryPickup (AActor *toucher, AActor **toucher_return)
 {
+	TObjPtr<AInventory> Invstack = Inventory; // A pointer of the inventories item stack.
+
 	// unmorphed versions of a currently morphed actor cannot pick up anything. 
 	if (toucher->flags & MF_UNMORPHED) return false;
 
@@ -1392,7 +1439,27 @@ bool AInventory::CallTryPickup (AActor *toucher, AActor **toucher_return)
 		GoAwayAndDie();
 	}
 
-	if (res) GiveQuest(toucher);
+	if (res)
+	{
+		GiveQuest(toucher);
+
+		// Transfer all inventory accross that the old object had, if requested.
+		if ((ItemFlags & IF_TRANSFER))
+		{
+			while (Invstack)
+			{
+				AInventory* titem = Invstack;
+				Invstack = titem->Inventory;
+				if (titem->Owner == this)
+				{
+					if (!titem->CallTryPickup(toucher)) // The object no longer can exist
+					{
+						titem->Destroy();
+					}
+				}
+			}
+		}
+	}
 	return res;
 }
 

@@ -63,6 +63,7 @@ class FRenderState
 	float mInterpolationFactor;
 	float mClipHeightTop, mClipHeightBottom;
 	float mShaderTimer;
+	bool mLastDepthClamp;
 
 	FVertexBuffer *mVertexBuffer, *mCurrentVertexBuffer;
 	FStateVec4 mColor;
@@ -72,6 +73,7 @@ class FRenderState
 	PalEntry mFogColor;
 	PalEntry mObjectColor;
 	FStateVec4 mDynColor;
+	float mClipSplit[2];
 
 	int mEffectState;
 	int mColormapState;
@@ -278,6 +280,28 @@ public:
 		return mFogColor;
 	}
 
+	void SetClipSplit(float bottom, float top)
+	{
+		mClipSplit[0] = bottom;
+		mClipSplit[1] = top;
+	}
+
+	void SetClipSplit(float *vals)
+	{
+		memcpy(mClipSplit, vals, 2 * sizeof(float));
+	}
+
+	void GetClipSplit(float *out)
+	{
+		memcpy(out, mClipSplit, 2 * sizeof(float));
+	}
+
+	void ClearClipSplit()
+	{
+		mClipSplit[0] = -1000000.f;
+		mClipSplit[1] = 1000000.f;
+	}
+
 	void BlendFunc(int src, int dst)
 	{
 		if (!gl_direct_state_change)
@@ -307,6 +331,16 @@ public:
 		{
 			glBlendEquation(eq);
 		}
+	}
+
+	// This wraps the depth clamp setting because we frequently need to read it which OpenGL is not particularly performant at...
+	bool SetDepthClamp(bool on)
+	{
+		bool res = mLastDepthClamp;
+		if (!on) glDisable(GL_DEPTH_CLAMP);
+		else glEnable(GL_DEPTH_CLAMP);
+		mLastDepthClamp = on;
+		return res;
 	}
 
 	void Set2DMode(bool on)

@@ -60,7 +60,8 @@ bool APowerupGiver::Use (bool pickup)
 	}
 	if (BlendColor != 0)
 	{
-		power->BlendColor = BlendColor;
+		if (BlendColor != MakeSpecialColormap(65535)) power->BlendColor = BlendColor;
+		else power->BlendColor = 0;
 	}
 	if (Mode != NAME_None)
 	{
@@ -71,7 +72,7 @@ bool APowerupGiver::Use (bool pickup)
 		power->Strength = Strength;
 	}
 
-	power->ItemFlags |= ItemFlags & (IF_ALWAYSPICKUP|IF_ADDITIVETIME);
+	power->ItemFlags |= ItemFlags & (IF_ALWAYSPICKUP|IF_ADDITIVETIME|IF_NOTELEPORTFREEZE);
 	if (power->CallTryPickup (Owner))
 	{
 		return true;
@@ -339,6 +340,18 @@ AInventory *APowerup::CreateTossable ()
 void APowerup::OwnerDied ()
 {
 	Destroy ();
+}
+
+//===========================================================================
+//
+// AInventory :: GetNoTeleportFreeze
+//
+//===========================================================================
+
+bool APowerup::GetNoTeleportFreeze ()
+{
+	if (ItemFlags & IF_NOTELEPORTFREEZE) return true;
+	return Super::GetNoTeleportFreeze();
 }
 
 // Invulnerability Powerup ---------------------------------------------------
@@ -996,7 +1009,8 @@ void APowerFlight::EndEffect ()
 	{
 		return;
 	}
-	if (!(Owner->player->cheats & CF_FLY))
+
+	if (!(Owner->flags7 & MF7_FLYCHEAT))
 	{
 		if (Owner->z != Owner->floorz)
 		{
@@ -1296,6 +1310,18 @@ void APowerTargeter::InitEffect ()
 	PositionAccuracy ();
 }
 
+bool APowerTargeter::HandlePickup(AInventory *item)
+{
+	if (Super::HandlePickup(item))
+	{
+		InitEffect();	// reset the HUD sprites
+		return true;
+	}
+	return false;
+}
+
+
+
 void APowerTargeter::DoEffect ()
 {
 	Super::DoEffect ();
@@ -1382,6 +1408,42 @@ void APowerFrightener::EndEffect ()
 		return;
 
 	Owner->player->cheats &= ~CF_FRIGHTENING;
+}
+
+// Buddha Powerup --------------------------------
+
+IMPLEMENT_CLASS (APowerBuddha)
+
+//===========================================================================
+//
+// APowerBuddha :: InitEffect
+//
+//===========================================================================
+
+void APowerBuddha::InitEffect ()
+{
+	Super::InitEffect();
+
+	if (Owner== NULL || Owner->player == NULL)
+		return;
+
+	Owner->player->cheats |= CF_BUDDHA;
+}
+
+//===========================================================================
+//
+// APowerBuddha :: EndEffect
+//
+//===========================================================================
+
+void APowerBuddha::EndEffect ()
+{
+	Super::EndEffect();
+
+	if (Owner== NULL || Owner->player == NULL)
+		return;
+
+	Owner->player->cheats &= ~CF_BUDDHA;
 }
 
 // Scanner powerup ----------------------------------------------------------
@@ -1707,6 +1769,7 @@ IMPLEMENT_CLASS(APowerRegeneration)
 
 void APowerRegeneration::DoEffect()
 {
+	Super::DoEffect();
 	if (Owner != NULL && Owner->health > 0 && (level.time & 31) == 0)
 	{
 		if (P_GiveBody(Owner, Strength/FRACUNIT))
@@ -1872,7 +1935,7 @@ void APowerMorph::EndEffect( )
 	if (!bNoCallUndoMorph)
 	{
 		int savedMorphTics = Player->morphTics;
-		P_UndoPlayerMorph (Player, Player);
+		P_UndoPlayerMorph (Player, Player, 0, !!(Player->MorphStyle & MORPH_UNDOALWAYS));
 
 		// Abort if unmorph failed; in that case,
 		// set the usual retry timer and return.

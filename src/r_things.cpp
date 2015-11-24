@@ -95,6 +95,7 @@ extern fixed_t globaluclip, globaldclip;
 EXTERN_CVAR (Bool, st_scale)
 EXTERN_CVAR(Bool, r_shadercolormaps)
 EXTERN_CVAR(Int, r_drawfuzz)
+EXTERN_CVAR(Bool, r_deathcamera);
 
 //
 // Sprite rotation 0 is facing the viewer,
@@ -1358,6 +1359,11 @@ void R_DrawPSprite (pspdef_t* psp, int pspnum, AActor *owner, fixed_t sx, fixed_
 		{
 			noaccel = true;
 		}
+		// If drawing with a BOOM colormap, disable acceleration.
+		if (mybasecolormap == &NormalLight && NormalLight.Maps != realcolormaps)
+		{
+			noaccel = true;
+		}
 		// If the main colormap has fixed lights, and this sprite is being drawn with that
 		// colormap, disable acceleration so that the lights can remain fixed.
 		if (!noaccel && realfixedcolormap == NULL &&
@@ -1410,7 +1416,8 @@ void R_DrawPlayerSprites ()
 
 	if (!r_drawplayersprites ||
 		!camera->player ||
-		(players[consoleplayer].cheats & CF_CHASECAM))
+		(players[consoleplayer].cheats & CF_CHASECAM) ||
+		(r_deathcamera && camera->health <= 0))
 		return;
 
 	if(fixedlightlev < 0 && viewsector->e && viewsector->e->XFloor.lightlist.Size()) {
@@ -2498,7 +2505,7 @@ void R_DrawParticle (vissprite_t *vis)
 		{
 			DWORD bg = bg2rgb[*dest];
 			bg = (fg+bg) | 0x1f07c1f;
-			*dest++ = RGB32k[0][0][bg & (bg>>15)];
+			*dest++ = RGB32k.All[bg & (bg>>15)];
 		} while (--count);
 		dest += spacing;
 	} while (--ycount);

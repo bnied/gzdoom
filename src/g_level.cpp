@@ -199,6 +199,46 @@ CCMD (map)
 //
 //==========================================================================
 
+CCMD(recordmap)
+{
+	if (netgame)
+	{
+		Printf("You cannot record a new game while in a netgame.");
+		return;
+	}
+	if (argv.argc() > 2)
+	{
+		try
+		{
+			if (!P_CheckMapData(argv[2]))
+			{
+				Printf("No map %s\n", argv[2]);
+			}
+			else
+			{
+				G_DeferedInitNew(argv[2]);
+				gameaction = ga_recordgame;
+				newdemoname = argv[1];
+				newdemomap = argv[2];
+			}
+		}
+		catch (CRecoverableError &error)
+		{
+			if (error.GetMessage())
+				Printf("%s", error.GetMessage());
+		}
+	}
+	else
+	{
+		Printf("Usage: recordmap <filename> <map name>\n");
+	}
+}
+
+//==========================================================================
+//
+//
+//==========================================================================
+
 CCMD (open)
 {
 	if (netgame)
@@ -235,6 +275,18 @@ CCMD (open)
 void G_NewInit ()
 {
 	int i;
+
+	// Destory all old player refrences that may still exist
+	TThinkerIterator<APlayerPawn> it(STAT_TRAVELLING);
+	APlayerPawn *pawn, *next;
+
+	next = it.Next();
+	while ((pawn = next) != NULL)
+	{
+		next = it.Next();
+		pawn->flags |= MF_NOSECTOR | MF_NOBLOCKMAP;
+		pawn->Destroy();
+	}
 
 	G_ClearSnapshots ();
 	ST_SetNeedRefresh();
@@ -315,7 +367,6 @@ static void InitPlayerClasses ()
 
 void G_InitNew (const char *mapname, bool bTitleLevel)
 {
-	EGameSpeed oldSpeed;
 	bool wantFast;
 	int i;
 
@@ -402,7 +453,6 @@ void G_InitNew (const char *mapname, bool bTitleLevel)
 		I_Error ("Could not find map %s\n", mapname);
 	}
 
-	oldSpeed = GameSpeed;
 	wantFast = !!G_SkillProperty(SKILLP_FastMonsters);
 	GameSpeed = wantFast ? SPEED_Fast : SPEED_Normal;
 
@@ -481,6 +531,10 @@ void G_ChangeLevel(const char *levelname, int position, int flags, int nextSkill
 	if (unloading)
 	{
 		Printf (TEXTCOLOR_RED "Unloading scripts cannot exit the level again.\n");
+		return;
+	}
+	if (gameaction == ga_completed)	// do not exit multiple times.
+	{
 		return;
 	}
 
@@ -851,11 +905,13 @@ void G_DoLoadLevel (int position, bool autosave)
 	if (level.flags2 & LEVEL2_FORCETEAMPLAYOFF)
 		teamplay = false;
 
+	FString mapname = level.MapName;
+	mapname.ToLower();
 	Printf (
 			"\n\35\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36"
 			"\36\36\36\36\36\36\36\36\36\36\36\36\37\n\n"
 			TEXTCOLOR_BOLD "%s - %s\n\n",
-			level.MapName.GetChars(), level.LevelName.GetChars());
+			mapname.GetChars(), level.LevelName.GetChars());
 
 	if (wipegamestate == GS_LEVEL)
 		wipegamestate = GS_FORCEWIPE;
@@ -1112,6 +1168,8 @@ void G_StartTravel ()
 			}
 		}
 	}
+
+	bglobal.StartTravel ();
 }
 
 //==========================================================================
@@ -1175,6 +1233,7 @@ void G_FinishTravel ()
 			pawn->lastenemy = NULL;
 			pawn->player->mo = pawn;
 			pawn->player->camera = pawn;
+			pawn->player->viewheight = pawn->ViewHeight;
 			pawn->flags2 &= ~MF2_BLASTED;
 			DObject::StaticPointerSubstitution (oldpawn, pawn);
 			oldpawn->Destroy();
@@ -1200,6 +1259,8 @@ void G_FinishTravel ()
 			}
 		}
 	}
+
+	bglobal.FinishTravel ();
 }
  
 //==========================================================================
@@ -1222,6 +1283,7 @@ void G_InitLevelLocals ()
 	level.teamdamage = teamdamage;
 	level.flags = 0;
 	level.flags2 = 0;
+	level.flags3 = 0;
 
 	info = FindLevelInfo (level.MapName);
 
@@ -1275,6 +1337,7 @@ void G_InitLevelLocals ()
 	level.clusterflags = clus ? clus->flags : 0;
 	level.flags |= info->flags;
 	level.flags2 |= info->flags2;
+	level.flags3 |= info->flags3;
 	level.levelnum = info->levelnum;
 	level.Music = info->Music;
 	level.musicorder = info->musicorder;
@@ -1378,12 +1441,14 @@ void G_AirControlChanged ()
 //
 //
 //==========================================================================
+void gl_SerializeGlobals(FArchive &arc);
 
 void G_SerializeLevel (FArchive &arc, bool hubLoad)
 {
 	int i = level.totaltime;
 	
 	Renderer->StartSerialize(arc);
+	gl_SerializeGlobals(arc);
 
 	arc << level.flags
 		<< level.flags2
@@ -1399,7 +1464,9 @@ void G_SerializeLevel (FArchive &arc, bool hubLoad)
 
 	if (SaveVersion >= 3313)
 	{
-		arc << level.nextmusic;
+		// This is a player property now
+		int nextmusic;
+		arc << nextmusic;
 	}
 
 	// Hub transitions must keep the current total time
@@ -1726,8 +1793,14 @@ void G_ReadSnapshots (PNGHandle *png)
 		DWORD snapver;
 
 		arc << snapver;
-		arc << namelen;
-		arc.Read (mapname, namelen);
+		if (SaveVersion < 4508)
+		{
+			arc << namelen;
+			arc.Read(mapname, namelen);
+			mapname[namelen] = 0;
+			MapName = mapname;
+		}
+		else arc << MapName;
 		TheDefaultLevelInfo.snapshotVer = snapver;
 		TheDefaultLevelInfo.snapshot = new FCompressedMemFile;
 		TheDefaultLevelInfo.snapshot->Serialize (arc);

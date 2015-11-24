@@ -312,6 +312,11 @@ FString level_info_t::LookupLevelName()
 			{
 				mysnprintf (checkstring, countof(checkstring), "%d: ", atoi(&MapName[5]));
 			}
+			else
+			{
+				// make sure nothing is stripped.
+				checkstring[0] = '\0';
+			}
 			thename = strstr (lookedup, checkstring);
 			if (thename == NULL)
 			{
@@ -705,8 +710,6 @@ void FMapInfoParser::ParseCluster()
 		}
 		else if (sc.Compare("music"))
 		{
-			int order = 0;
-
 			ParseAssign();
 			ParseMusic(clusterinfo->MessageMusic, clusterinfo->musicorder);
 		}
@@ -1067,6 +1070,25 @@ DEFINE_MAP_OPTION(PrecacheSounds, true)
 	} while (parse.sc.CheckString(","));
 }
 
+DEFINE_MAP_OPTION(PrecacheTextures, true)
+{
+	parse.ParseAssign();
+
+	do
+	{
+		parse.sc.MustGetString();
+		FTextureID tex = TexMan.CheckForTexture(parse.sc.String, FTexture::TEX_Wall, FTextureManager::TEXMAN_Overridable|FTextureManager::TEXMAN_TryAny|FTextureManager::TEXMAN_ReturnFirst);
+		if (!tex.isValid())
+		{
+			parse.sc.ScriptMessage("Unknown texture \"%s\"", parse.sc.String);
+		}
+		else
+		{
+			info->PrecacheTextures.Push(tex);
+		}
+	} while (parse.sc.CheckString(","));
+}
+
 DEFINE_MAP_OPTION(redirect, true)
 {
 	parse.ParseAssign();
@@ -1190,6 +1212,9 @@ enum EMIType
 	MITYPE_SETFLAG2,
 	MITYPE_CLRFLAG2,
 	MITYPE_SCFLAGS2,
+	MITYPE_SETFLAG3,
+	MITYPE_CLRFLAG3,
+	MITYPE_SCFLAGS3,
 	MITYPE_COMPATFLAG,
 };
 
@@ -1275,6 +1300,7 @@ MapFlagHandlers[] =
 	{ "rememberstate",					MITYPE_CLRFLAG2,	LEVEL2_FORGETSTATE, 0 },
 	{ "unfreezesingleplayerconversations",MITYPE_SETFLAG2,	LEVEL2_CONV_SINGLE_UNFREEZE, 0 },
 	{ "spawnwithweaponraised",			MITYPE_SETFLAG2,	LEVEL2_PRERAISEWEAPON, 0 },
+	{ "forcefakecontrast",				MITYPE_SETFLAG3,	LEVEL3_FORCEFAKECONTRAST, 0 },
 	{ "nobotnodes",						MITYPE_IGNORE,	0, 0 },		// Skulltag option: nobotnodes
 	{ "compat_shorttex",				MITYPE_COMPATFLAG, COMPATF_SHORTTEX, 0 },
 	{ "compat_stairs",					MITYPE_COMPATFLAG, COMPATF_STAIRINDEX, 0 },
@@ -1306,6 +1332,8 @@ MapFlagHandlers[] =
 	{ "compat_maskedmidtex",			MITYPE_COMPATFLAG, COMPATF_MASKEDMIDTEX, 0 },
 	{ "compat_badangles",				MITYPE_COMPATFLAG, 0, COMPATF2_BADANGLES },
 	{ "compat_floormove",				MITYPE_COMPATFLAG, 0, COMPATF2_FLOORMOVE },
+	{ "compat_soundcutoff",				MITYPE_COMPATFLAG, 0, COMPATF2_SOUNDCUTOFF },
+	{ "compat_pointonline",				MITYPE_COMPATFLAG, 0, COMPATF2_POINTONLINE },
 	{ "cd_start_track",					MITYPE_EATNEXT,	0, 0 },
 	{ "cd_end1_track",					MITYPE_EATNEXT,	0, 0 },
 	{ "cd_end2_track",					MITYPE_EATNEXT,	0, 0 },
@@ -1369,6 +1397,20 @@ void FMapInfoParser::ParseMapDefinition(level_info_t &info)
 
 			case MITYPE_SCFLAGS2:
 				info.flags2 = (info.flags2 & handler->data2) | handler->data1;
+				break;
+
+			case MITYPE_SETFLAG3:
+				info.flags3 |= handler->data1;
+				info.flags3 |= handler->data2;
+				break;
+
+			case MITYPE_CLRFLAG3:
+				info.flags3 &= ~handler->data1;
+				info.flags3 |= handler->data2;
+				break;
+
+			case MITYPE_SCFLAGS3:
+				info.flags3 = (info.flags3 & handler->data2) | handler->data1;
 				break;
 
 			case MITYPE_COMPATFLAG:
@@ -1838,6 +1880,42 @@ void FMapInfoParser::ParseMapInfo (int lump, level_info_t &gamedefaults, level_i
 			else
 			{
 				sc.ScriptError("intermission definitions not supported with old MAPINFO syntax");
+			}
+		}
+		else if (sc.Compare("doomednums"))
+		{
+			if (format_type != FMT_Old)
+			{
+				format_type = FMT_New;
+				ParseDoomEdNums();
+			}
+			else
+			{
+				sc.ScriptError("doomednums definitions not supported with old MAPINFO syntax");
+			}
+		}
+		else if (sc.Compare("spawnnums"))
+		{
+			if (format_type != FMT_Old)
+			{
+				format_type = FMT_New;
+				ParseSpawnNums();
+			}
+			else
+			{
+				sc.ScriptError("spawnnums definitions not supported with old MAPINFO syntax");
+			}
+		}
+		else if (sc.Compare("conversationids"))
+		{
+			if (format_type != FMT_Old)
+			{
+				format_type = FMT_New;
+				ParseConversationIDs();
+			}
+			else
+			{
+				sc.ScriptError("conversationids definitions not supported with old MAPINFO syntax");
 			}
 		}
 		else if (sc.Compare("automap") || sc.Compare("automap_overlay"))

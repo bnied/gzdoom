@@ -158,7 +158,7 @@ void gl_GenerateGlobalBrightmapFromColormap()
 			if (cmapdata[i+j*256]!=i || (paldata[3*i]<10 && paldata[3*i+1]<10 && paldata[3*i+2]<10))
 			{
 				GlobalBrightmap.Remap[i]=black;
-				GlobalBrightmap.Palette[i]=PalEntry(0,0,0);
+				GlobalBrightmap.Palette[i] = PalEntry(255, 0, 0, 0);
 			}
 		}
 	}
@@ -232,10 +232,10 @@ FTexture::MiscGLInfo::MiscGLInfo() throw()
 	bFullbright = false;
 	bSkyColorDone = false;
 	bBrightmapChecked = false;
-	bBrightmap = false;
-	bBrightmapDisablesFullbright = false;
+	bDisableFullbright = false;
 	bNoFilter = false;
 	bNoCompress = false;
+	bNoExpand = false;
 	areas = NULL;
 	areacount = 0;
 	mIsTransparent = -1;
@@ -321,12 +321,12 @@ void FTexture::PrecacheGL(int cache)
 {
 	if (gl_precache)
 	{
-		if (cache & 2)
+		if (cache & (FTextureManager::HIT_Wall | FTextureManager::HIT_Flat | FTextureManager::HIT_Sky))
 		{
 			FMaterial * gltex = FMaterial::ValidateTexture(this, false);
 			if (gltex) gltex->Precache();
 		}
-		if (cache & 4)
+		if (cache & FTextureManager::HIT_Sprite)
 		{
 			FMaterial * gltex = FMaterial::ValidateTexture(this, true);
 			if (gltex) gltex->Precache();
@@ -594,7 +594,7 @@ bool FTexture::SmoothEdges(unsigned char * buffer,int w, int h)
 
 bool FTexture::ProcessData(unsigned char * buffer, int w, int h, bool ispatch)
 {
-	if (bMasked && !gl_info.bBrightmap) 
+	if (bMasked) 
 	{
 		bMasked = SmoothEdges(buffer, w, h);
 		if (bMasked && !ispatch) FindHoles(buffer, w, h);
@@ -620,7 +620,7 @@ FBrightmapTexture::FBrightmapTexture (FTexture *source)
 	bNoDecals = source->bNoDecals;
 	Rotations = source->Rotations;
 	UseType = source->UseType;
-	gl_info.bBrightmap = true;
+	bMasked = false;
 	id.SetInvalid();
 	SourceLump = -1;
 }
@@ -737,10 +737,10 @@ void gl_ParseBrightmap(FScanner &sc, int deflump)
 			return;
 		}
 
-		bmtex->gl_info.bBrightmap = true;
+		bmtex->bMasked = false;
 		tex->gl_info.Brightmap = bmtex;
 	}	
-	tex->gl_info.bBrightmapDisablesFullbright = disable_fullbright;
+	tex->gl_info.bDisableFullbright = disable_fullbright;
 }
 
 //==========================================================================

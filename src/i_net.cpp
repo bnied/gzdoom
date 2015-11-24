@@ -110,6 +110,7 @@ const char *neterror (void);
 enum
 {
 	PRE_CONNECT,			// Sent from guest to host for initial connection
+	PRE_KEEPALIVE,
 	PRE_DISCONNECT,			// Sent from guest that aborts the game
 	PRE_ALLHERE,			// Sent from host to guest when everybody has connected
 	PRE_CONACK,				// Sent from host to guest to acknowledge PRE_CONNECT receipt
@@ -134,8 +135,8 @@ struct PreGamePacket
 	};
 	struct
 	{
-		u_long	address;
-		u_short	port;
+		DWORD	address;
+		WORD	port;
 		BYTE	player;
 		BYTE	pad;
 	} machines[MAXNETNODES];
@@ -318,7 +319,11 @@ void PacketGet (void)
 	}
 	else if (c > 0)
 	{	//The packet is not from any in-game node, so we might as well discard it.
-		Printf("Dropped packet: Unknown host (%s:%d)\n", inet_ntoa(fromaddress.sin_addr), fromaddress.sin_port);
+		// Don't show the message for disconnect notifications.
+		if (c != 2 || TransmitBuffer[0] != PRE_FAKE || TransmitBuffer[1] != PRE_DISCONNECT)
+		{
+			DPrintf("Dropped packet: Unknown host (%s:%d)\n", inet_ntoa(fromaddress.sin_addr), fromaddress.sin_port);
+		}
 		doomcom.remotenode = -1;
 		return;
 	}
@@ -548,10 +553,15 @@ bool Host_CheckForConnects (void *userdata)
 				SendConAck (doomcom.numnodes, numplayers);
 			}
 			break;
+
+		case PRE_KEEPALIVE:
+			break;
 		}
 	}
 	if (doomcom.numnodes < numplayers)
 	{
+		// Send message to everyone as a keepalive
+		SendConAck(doomcom.numnodes, numplayers);
 		return false;
 	}
 
@@ -652,6 +662,12 @@ void HostGame (int i)
 	if ((i == Args->NumArgs() - 1) || !(numplayers = atoi (Args->GetArg(i+1))))
 	{	// No player count specified, assume 2
 		numplayers = 2;
+	}
+
+	if (numplayers > MAXNETNODES)
+	{
+		I_FatalError("You cannot host a game with %d players. The limit is currently %d.", numplayers, MAXNETNODES);
+		return;
 	}
 
 	if (numplayers == 1)
@@ -788,7 +804,6 @@ bool Guest_WaitForOthers (void *userdata)
 			{
 				int node;
 
-				packet.NumNodes = packet.NumNodes;
 				doomcom.numnodes = packet.NumNodes + 2;
 				sendplayer[0] = packet.ConsoleNum;	// My player number
 				doomcom.consoleplayer = packet.ConsoleNum;
@@ -821,6 +836,10 @@ bool Guest_WaitForOthers (void *userdata)
 			break;
 		}
 	}
+
+	packet.Fake = PRE_FAKE;
+	packet.Message = PRE_KEEPALIVE;
+	PreSend(&packet, 2, &sendaddress[1]);
 
 	return false;
 }

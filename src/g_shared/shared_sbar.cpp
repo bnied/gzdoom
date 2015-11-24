@@ -1123,7 +1123,7 @@ void DBaseStatusBar::DrawCrosshair ()
 	ST_LoadCrosshair();
 
 	// Don't draw the crosshair if there is none
-	if (CrosshairImage == NULL || gamestate == GS_TITLELEVEL)
+	if (CrosshairImage == NULL || gamestate == GS_TITLELEVEL || camera->health <= 0)
 	{
 		return;
 	}
@@ -1502,7 +1502,7 @@ void DBaseStatusBar::DrawTopStuff (EHudState state)
 	{
 		screen->DrawText (SmallFont, CR_TAN, 0, ST_Y - 40 * CleanYfac,
 			"Demo was recorded with a different version\n"
-			"of ZDoom. Expect it to go out of sync.",
+			"of " GAMENAME ". Expect it to go out of sync.",
 			DTA_CleanNoMove, true, TAG_DONE);
 	}
 

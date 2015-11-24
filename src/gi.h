@@ -153,7 +153,6 @@ struct gameinfo_t
 	int definventorymaxamount;
 	int defaultrespawntime;
 	int defaultdropstyle;
-	int player5start;
 	DWORD pickupcolor;
 	TArray<FString> quitmessages;
 	FName mTitleColor;
@@ -169,6 +168,7 @@ struct gameinfo_t
 	int TextScreenY;
 	FName DefaultEndSequence;
 	FString mMapArrow, mCheatMapArrow;
+	FString mEasyKey, mCheatKey;
 	FGIFont mStatscreenMapNameFont;
 	FGIFont mStatscreenFinishedFont;
 	FGIFont mStatscreenEnteringFont;

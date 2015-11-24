@@ -94,7 +94,14 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 
 	if (lightbuffertype == GL_UNIFORM_BUFFER)
 	{
-		vp_comb.Format("#version 130\n#extension GL_ARB_uniform_buffer_object : require\n#define NUM_UBO_LIGHTS %d\n", lightbuffersize);
+		if (gl.glslversion < 1.4f || gl.version < 3.1f)
+		{
+			vp_comb.Format("#version 130\n#extension GL_ARB_uniform_buffer_object : require\n#define NUM_UBO_LIGHTS %d\n", lightbuffersize);
+		}
+		else
+		{
+			vp_comb.Format("#version 140\n#define NUM_UBO_LIGHTS %d\n", lightbuffersize);
+		}
 	}
 	else
 	{
@@ -198,6 +205,7 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 	muTextureMode.Init(hShader, "uTextureMode");
 	muCameraPos.Init(hShader, "uCameraPos");
 	muLightParms.Init(hShader, "uLightAttr");
+	muClipSplit.Init(hShader, "uClipSplit");
 	muColormapStart.Init(hShader, "uFixedColormapStart");
 	muColormapRange.Init(hShader, "uFixedColormapRange");
 	muLightIndex.Init(hShader, "uLightIndex");

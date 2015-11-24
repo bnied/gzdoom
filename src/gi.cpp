@@ -290,6 +290,8 @@ void FMapInfoParser::ParseGameInfo()
 			else gameinfo.mCheatMapArrow = "";
 		}
 		// Insert valid keys here.
+		GAMEINFOKEY_STRING(mCheatKey, "cheatKey")
+		GAMEINFOKEY_STRING(mEasyKey, "easyKey")
 		GAMEINFOKEY_STRING(TitlePage, "titlePage")
 		GAMEINFOKEY_STRINGARRAY(creditPages, "addcreditPage", 8, false)
 		GAMEINFOKEY_STRINGARRAY(creditPages, "CreditPage", 8, true)
@@ -333,7 +335,6 @@ void FMapInfoParser::ParseGameInfo()
 		GAMEINFOKEY_INT(defaultrespawntime, "defaultrespawntime")
 		GAMEINFOKEY_INT(defaultdropstyle, "defaultdropstyle")
 		GAMEINFOKEY_STRING(Endoom, "endoom")
-		GAMEINFOKEY_INT(player5start, "player5start")
 		GAMEINFOKEY_STRINGARRAY(quitmessages, "addquitmessages", 0, false)
 		GAMEINFOKEY_STRINGARRAY(quitmessages, "quitmessages", 0, true)
 		GAMEINFOKEY_STRING(mTitleColor, "menufontcolor_title")

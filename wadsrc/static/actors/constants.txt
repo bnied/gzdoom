@@ -16,6 +16,7 @@ const int SF_NOUSEAMMOMISS = 8;
 const int SF_NOUSEAMMO = 16;
 const int SF_NOPULLIN = 32;
 const int SF_NOTURN = 64;
+const int SF_STEALARMOR = 128;
 
 // Flags for A_CustomMissile
 const int CMF_AIMOFFSET = 1;
@@ -70,6 +71,12 @@ const int SXF_TRANSFERRENDERSTYLE =		1 << 19;
 const int SXF_SETTARGET =				1 << 20;
 const int SXF_SETTRACER =				1 << 21;
 const int SXF_NOPOINTERS =				1 << 22;
+const int SXF_ORIGINATOR =				1 << 23;
+const int SXF_TRANSFERSPRITEFRAME	=	1 << 24;
+const int SXF_TRANSFERROLL =			1 << 25;
+const int SXF_ISTARGET				=	1 << 26;
+const int SXF_ISMASTER				=	1 << 27;
+const int SXF_ISTRACER				=	1 << 28;
 
 // Flags for A_Chase
 const int CHF_FASTCHASE = 1;
@@ -92,18 +99,22 @@ const int RSF_KEEPTARGET = 2;
 const int RSF_TELEFRAG = 4;
 
 // Flags for A_JumpIfTargetInLOS and A_JumpIfInTargetLOS
-const int JLOSF_PROJECTILE = 1;
-const int JLOSF_NOSIGHT = 2;
-const int JLOSF_CLOSENOFOV = 4;
-const int JLOSF_CLOSENOSIGHT = 8;
-const int JLOSF_CLOSENOJUMP = 16;
-const int JLOSF_DEADNOJUMP = 32;
-const int JLOSF_CHECKMASTER = 64;
-const int JLOSF_TARGETLOS = 128;
-const int JLOSF_FLIPFOV = 256;
-const int JLOSF_ALLYNOJUMP = 512;
-const int JLOSF_COMBATANTONLY = 1024;
-const int JLOSF_NOAUTOAIM = 2048;
+enum
+{
+	JLOSF_PROJECTILE =		1,
+	JLOSF_NOSIGHT =			1 << 1,
+	JLOSF_CLOSENOFOV =		1 << 2,
+	JLOSF_CLOSENOSIGHT =	1 << 3,
+	JLOSF_CLOSENOJUMP =		1 << 4,
+	JLOSF_DEADNOJUMP =		1 << 5,
+	JLOSF_CHECKMASTER =		1 << 6,
+	JLOSF_TARGETLOS =		1 << 7,
+	JLOSF_FLIPFOV =			1 << 8,
+	JLOSF_ALLYNOJUMP =		1 << 9,
+	JLOSF_COMBATANTONLY =	1 << 10,
+	JLOSF_NOAUTOAIM =		1 << 11,
+	JLOSF_CHECKTRACER =		1 << 12,
+};
 
 // Flags for A_ChangeVelocity
 const int CVF_RELATIVE = 1;
@@ -132,6 +143,7 @@ const int MRF_NEWTIDBEHAVIOUR = 256;
 const int MRF_UNDOBYDEATH = 512;
 const int MRF_UNDOBYDEATHFORCED = 1024;
 const int MRF_UNDOBYDEATHSAVES = 2048;
+const int MRF_UNDOALWAYS = 4096;
 
 // Flags for A_RailAttack and A_CustomRailgun
 const int RGF_SILENT = 1;
@@ -170,13 +182,32 @@ const int CPF_USEAMMO = 1;
 const int CPF_DAGGER = 2;
 const int CPF_PULLIN = 4;
 const int CPF_NORANDOMPUFFZ = 8;
+const int CPF_NOTURN = 16;
+const int CPF_STEALARMOR = 32;
 
 // Flags for A_CustomMissile
 const int FPF_AIMATANGLE = 1;
 const int FPF_TRANSFERTRANSLATION = 2;
+const int FPF_NOAUTOAIM = 4;
 
 // Flags for A_Teleport
-const int TF_TELEFRAG = 1;const int TF_RANDOMDECIDE = 2;
+enum
+{
+	TF_TELEFRAG =		0x00000001, // Allow telefrag in order to teleport.
+	TF_RANDOMDECIDE =	0x00000002, // Randomly fail based on health. (A_Srcr2Decide)
+	TF_FORCED =			0x00000004, // Forget what's in the way. TF_Telefrag takes precedence though.
+	TF_KEEPVELOCITY =	0x00000008, // Preserve velocity.
+	TF_KEEPANGLE =		0x00000010, // Keep angle.
+	TF_USESPOTZ =		0x00000020, // Set the z to the spot's z, instead of the floor.
+	TF_NOSRCFOG =		0x00000040, // Don't leave any fog behind when teleporting.
+	TF_NODESTFOG =		0x00000080, // Don't spawn any fog at the arrival position.
+	TF_USEACTORFOG =	0x00000100, // Use the actor's TeleFogSourceType and TeleFogDestType fogs.
+	TF_NOJUMP =			0x00000200, // Don't jump after teleporting.
+	TF_OVERRIDE =		0x00000400, // Ignore NOTELEPORT.
+
+	TF_KEEPORIENTATION = TF_KEEPVELOCITY|TF_KEEPANGLE,
+	TF_NOFOG = TF_NOSRCFOG|TF_NODESTFOG,
+};
 
 // Flags for A_WolfAttack
 const int WAF_NORANDOM = 1;
@@ -186,15 +217,23 @@ const int WAF_USEPUFF = 2;
 enum
 {
 	RGF_GIVESELF	=   1,
-	RGF_PLAYERS		=   2,
-	RGF_MONSTERS	=   4,
-	RGF_OBJECTS		=   8,
-	RGF_VOODOO		=  16,
-	RGF_CORPSES		=  32,
-	RGF_NOTARGET	=  64,
-	RGF_NOTRACER	= 128,
-	RGF_NOMASTER	= 256,
-	RGF_CUBE		= 512,
+	RGF_PLAYERS		=   1 << 1,
+	RGF_MONSTERS	=   1 << 2,
+	RGF_OBJECTS		=   1 << 3,
+	RGF_VOODOO		=	1 << 4,
+	RGF_CORPSES		=	1 << 5,
+	RGF_NOTARGET	=	1 << 6,
+	RGF_NOTRACER	=	1 << 7,
+	RGF_NOMASTER	=	1 << 8,
+	RGF_CUBE		=	1 << 9,
+	RGF_NOSIGHT		=	1 << 10,
+	RGF_MISSILES	=	1 << 11,
+	RGF_INCLUSIVE	=	1 << 12,
+	RGF_ITEMS		=	1 << 13,
+	RGF_KILLED		=	1 << 14,
+	RGF_EXFILTER	=	1 << 15,
+	RGF_EXSPECIES	=	1 << 16,
+	RGF_EITHER		=	1 << 17,
 };
 
 // Activation flags
@@ -319,8 +358,14 @@ Const Int WARPF_STOP = 0x80;
 Const Int WARPF_TOFLOOR = 0x100;
 Const Int WARPF_TESTONLY = 0x200;
 Const Int WAPRF_ABSOLUTEPOSITION = 0x400;
+Const Int WARPF_ABSOLUTEPOSITION = 0x400;
+Const Int WARPF_BOB = 0x800;
+Const Int WARPF_MOVEPTR = 0x1000;
+Const Int WARPF_USETID = 0x2000;
+Const Int WARPF_COPYVELOCITY = 0x4000;
+Const Int WARPF_COPYPITCH = 0x8000;
 
-// flags for A_SetPitch/SetAngle
+// flags for A_SetPitch/SetAngle/SetRoll
 const int SPF_FORCECLAMP = 1;
 const int SPF_INTERPOLATE = 2;
 
@@ -361,21 +406,39 @@ enum
 	CLOFF_JUMP_ON_MISS =		0x200000,
 	CLOFF_AIM_VERT_NOOFFSET =	0x400000,
 
+	CLOFF_SETTARGET =			0x800000,
+	CLOFF_SETMASTER =			0x1000000,
+	CLOFF_SETTRACER =			0x2000000,
+
 	CLOFF_SKIPOBSTACLES = CLOFF_SKIPENEMY|CLOFF_SKIPFRIEND|CLOFF_SKIPOBJECT|CLOFF_SKIPNONHOSTILE,
 	CLOFF_NOAIM = CLOFF_NOAIM_VERT|CLOFF_NOAIM_HORZ
 };
 
 // Flags for A_Kill (Master/Target/Tracer/Children/Siblings) series
-
-const int KILS_FOILINVUL =		1;
-const int KILS_KILLMISSILES =	2;
-const int KILS_NOMONSTERS =		4;
+enum
+{
+	KILS_FOILINVUL =		0x00000001,
+	KILS_KILLMISSILES =		0x00000002,
+	KILS_NOMONSTERS =		0x00000004,
+	KILS_FOILBUDDHA =		0x00000008,
+	KILS_EXFILTER =			0x00000010,
+	KILS_EXSPECIES =		0x00000020,
+	KILS_EITHER =			0x00000040,
+};
 
 // Flags for A_Damage (Master/Target/Tracer/Children/Siblings/Self) series
-const int DMSS_FOILINVUL =		1;
-const int DMSS_AFFECTARMOR =	2;
-const int DMSS_KILL =			4;
-const int DMSS_NOFACTOR =	8;
+enum
+{
+	DMSS_FOILINVUL =		0x00000001,
+	DMSS_AFFECTARMOR =		0x00000002,
+	DMSS_KILL =				0x00000004,
+	DMSS_NOFACTOR =			0x00000008,
+	DMSS_FOILBUDDHA =		0x00000010,
+	DMSS_NOPROTECT =		0x00000020,
+	DMSS_EXFILTER =			0x00000040,
+	DMSS_EXSPECIES =		0x00000080,
+	DMSS_EITHER =			0x00000100,
+};
 
 // Flags for A_AlertMonsters
 const int AMF_TARGETEMITTER = 1;
@@ -385,12 +448,53 @@ const int AMF_EMITFROMTARGET = 4;
 // Flags for A_Remove*
 enum
 {
-	RMVF_MISSILES =			1 << 0,
-	RMVF_NOMONSTERS =		1 << 1,
-	RMVF_MISC =				1 << 2,
-	RMVF_EVERYTHING =		1 << 3
+	RMVF_MISSILES =			0x00000001,
+	RMVF_NOMONSTERS =		0x00000002,
+	RMVF_MISC =				0x00000004,
+	RMVF_EVERYTHING =		0x00000008,
+	RMVF_EXFILTER =			0x00000010,
+	RMVF_EXSPECIES =		0x00000020,
+	RMVF_EITHER =			0x00000040,
 };
 
+// Flags for A_Fade*
+enum
+{
+	FTF_REMOVE =	1 << 0,
+	FTF_CLAMP =		1 << 1,
+};
+
+// Flags for A_Face*
+enum
+{
+	FAF_BOTTOM = 1,
+	FAF_MIDDLE = 2,
+	FAF_TOP = 4,
+	FAF_NODISTFACTOR = 8,
+};
+
+// Flags for A_QuakeEx
+enum
+{
+	QF_RELATIVE =		1,
+	QF_SCALEDOWN =		1 << 1,
+	QF_SCALEUP =		1 << 2,
+	QF_MAX =			1 << 3,
+	QF_FULLINTENSITY =	1 << 4,
+	QF_WAVE =			1 << 5,
+};
+
+// Flags for A_CheckBlock
+// These flags only affect the calling actor('s pointer), not the ones being searched.
+enum 
+{
+	CBF_NOLINES			= 1 << 0,	//Don't check actors.
+	CBF_SETTARGET		= 1 << 1,	//Sets the caller/pointer's target to the actor blocking it. Actors only.
+	CBF_SETMASTER		= 1 << 2,	//^ but with master.
+	CBF_SETTRACER		= 1 << 3,	//^ but with tracer.
+	CBF_SETONPTR		= 1 << 4,	//Sets the pointer change on the actor doing the checking instead of self.
+};
 
 // This is only here to provide one global variable for testing.
 native int testglobalvar;
+

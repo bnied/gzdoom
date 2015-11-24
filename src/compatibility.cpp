@@ -49,6 +49,7 @@
 #include "gi.h"
 #include "g_level.h"
 #include "p_lnspec.h"
+#include "p_tags.h"
 #include "r_state.h"
 #include "w_wad.h"
 
@@ -82,6 +83,7 @@ enum
 	CP_SETWALLYSCALE,
 	CP_SETTHINGZ,
 	CP_SETTAG,
+	CP_SETTHINGFLAGS,
 };
 
 // EXTERNAL FUNCTION PROTOTYPES --------------------------------------------
@@ -108,6 +110,7 @@ static FCompatOption Options[] =
 	{ "rebuildnodes",			BCOMPATF_REBUILDNODES, SLOT_BCOMPAT },
 	{ "linkfrozenprops",		BCOMPATF_LINKFROZENPROPS, SLOT_BCOMPAT },
 	{ "disablepushwindowcheck",	BCOMPATF_NOWINDOWCHECK, SLOT_BCOMPAT },
+	{ "floatbob",				BCOMPATF_FLOATBOB, SLOT_BCOMPAT },
 
 	// list copied from g_mapinfo.cpp
 	{ "shorttex",				COMPATF_SHORTTEX, SLOT_COMPAT },
@@ -141,6 +144,8 @@ static FCompatOption Options[] =
 	{ "maskedmidtex",			COMPATF_MASKEDMIDTEX, SLOT_COMPAT },
 	{ "badangles",				COMPATF2_BADANGLES, SLOT_COMPAT2 },
 	{ "floormove",				COMPATF2_FLOORMOVE, SLOT_COMPAT2 },
+	{ "soundcutoff",			COMPATF2_SOUNDCUTOFF, SLOT_COMPAT2 },
+	{ "pointonline",			COMPATF2_POINTONLINE, SLOT_COMPAT2 },
 
 	{ NULL, 0, 0 }
 };
@@ -317,6 +322,15 @@ void ParseCompatibility()
 				sc.MustGetNumber();
 				CompatParams.Push(sc.Number);
 			}
+			else if (sc.Compare("setthingflags"))
+			{
+				if (flags.ExtCommandIndex == ~0u) flags.ExtCommandIndex = CompatParams.Size();
+				CompatParams.Push(CP_SETTHINGFLAGS);
+				sc.MustGetNumber();
+				CompatParams.Push(sc.Number);
+				sc.MustGetNumber();
+				CompatParams.Push(sc.Number);
+			}
 			else 
 			{
 				sc.UnGet();
@@ -423,6 +437,11 @@ void CheckCompatibility(MapData *map)
 	// Reset i_compatflags
 	compatflags.Callback();
 	compatflags2.Callback();
+	// Set floatbob compatibility for all maps with an original Hexen MAPINFO.
+	if (level.flags2 & LEVEL2_HEXENHACK)
+	{
+		ib_compatflags |= BCOMPATF_FLOATBOB;
+	}
 }
 
 //==========================================================================
@@ -437,7 +456,7 @@ void SetCompatibilityParams()
 	{
 		unsigned i = ii_compatparams;
 
-		while (CompatParams[i] != CP_END && i < CompatParams.Size())
+		while (i < CompatParams.Size() && CompatParams[i] != CP_END)
 		{
 			switch (CompatParams[i])
 			{
@@ -534,7 +553,17 @@ void SetCompatibilityParams()
 				{
 					if ((unsigned)CompatParams[i + 1] < (unsigned)numsectors)
 					{
-						sectors[CompatParams[i + 1]].tag = CompatParams[i + 2];
+						// this assumes that the sector does not have any tags yet!
+						tagManager.AddSectorTag(CompatParams[i + 1],  CompatParams[i + 2]);
+					}
+					i += 3;
+					break;
+				}
+				case CP_SETTHINGFLAGS:
+				{
+					if ((unsigned)CompatParams[i + 1] < MapThingsConverted.Size())
+					{
+						MapThingsConverted[CompatParams[i + 1]].flags = CompatParams[i + 2];
 					}
 					i += 3;
 					break;
@@ -569,12 +598,13 @@ CCMD (mapchecksum)
 		else
 		{
 			map->GetChecksum(cksum);
+			const char *wadname = Wads.GetWadName(Wads.GetLumpFile(map->lumpnum));
 			delete map;
 			for (size_t j = 0; j < sizeof(cksum); ++j)
 			{
 				Printf("%02X", cksum[j]);
 			}
-			Printf(" // %s\n", argv[i]);
+			Printf(" // %s %s\n", wadname, argv[i]);
 		}
 	}
 }
