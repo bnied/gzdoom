@@ -10,6 +10,7 @@ This is a simplified version of VSMatrix that has been adjusted for GZDoom's nee
 
 ----------------------------------------------------*/
 
+#include <algorithm>
 #include "gl/system/gl_system.h"
 #include <math.h>
 #include <stdlib.h>
@@ -120,37 +121,27 @@ VSMatrix::loadMatrix(const float *aMatrix)
 #endif
 
 
-// gl Translate implementation with matrix selection
+// gl Translate implementation
 void 
 VSMatrix::translate(FLOATTYPE x, FLOATTYPE y, FLOATTYPE z) 
 {
-	FLOATTYPE mat[16];
-
-	setIdentityMatrix(mat);
-	mat[12] = x;
-	mat[13] = y;
-	mat[14] = z;
-
-	multMatrix(mat);
+	mMatrix[12] = mMatrix[0] * x + mMatrix[4] * y + mMatrix[8] * z + mMatrix[12];
+	mMatrix[13] = mMatrix[1] * x + mMatrix[5] * y + mMatrix[9] * z + mMatrix[13];
+	mMatrix[14] = mMatrix[2] * x + mMatrix[6] * y + mMatrix[10] * z + mMatrix[14];
 }
 
 
-// gl Scale implementation with matrix selection
+// gl Scale implementation
 void 
 VSMatrix::scale(FLOATTYPE x, FLOATTYPE y, FLOATTYPE z) 
 {
-	FLOATTYPE mat[16];
-
-	setIdentityMatrix(mat,4);
-	mat[0] = x;
-	mat[5] = y;
-	mat[10] = z;
-
-	multMatrix(mat);
+	mMatrix[0] *= x;   mMatrix[1] *= x;   mMatrix[2] *= x;   mMatrix[3] *= x;
+	mMatrix[4] *= y;   mMatrix[5] *= y;   mMatrix[6] *= y;   mMatrix[7] *= y;
+	mMatrix[8] *= z;   mMatrix[9] *= z;   mMatrix[10] *= z;   mMatrix[11] *= z;
 }
 
 
-// gl Rotate implementation with matrix selection
+// gl Rotate implementation
 void 
 VSMatrix::rotate(FLOATTYPE angle, FLOATTYPE x, FLOATTYPE y, FLOATTYPE z)
 {
@@ -431,7 +422,7 @@ void
 VSMatrix::computeNormalMatrix(const FLOATTYPE *aMatrix) 
 {
 
-	FLOATTYPE mMat3x3[9];
+	double mMat3x3[9];
 
 	mMat3x3[0] = aMatrix[0];
 	mMat3x3[1] = aMatrix[1];
@@ -445,13 +436,13 @@ VSMatrix::computeNormalMatrix(const FLOATTYPE *aMatrix)
 	mMat3x3[7] = aMatrix[9];
 	mMat3x3[8] = aMatrix[10];
 
-	FLOATTYPE det, invDet;
+	double det, invDet;
 
 	det = mMat3x3[0] * (mMat3x3[4] * mMat3x3[8] - mMat3x3[5] * mMat3x3[7]) +
 		  mMat3x3[1] * (mMat3x3[5] * mMat3x3[6] - mMat3x3[8] * mMat3x3[3]) +
 		  mMat3x3[2] * (mMat3x3[3] * mMat3x3[7] - mMat3x3[4] * mMat3x3[6]);
 
-	invDet = 1.0f/det;
+	invDet = 1.0/det;
 
 	mMatrix[0] = (mMat3x3[4] * mMat3x3[8] - mMat3x3[5] * mMat3x3[7]) * invDet;
 	mMatrix[1] = (mMat3x3[5] * mMat3x3[6] - mMat3x3[8] * mMat3x3[3]) * invDet;
@@ -492,4 +483,214 @@ VSMatrix::multMatrix(FLOATTYPE *resMat, const FLOATTYPE *aMatrix)
 		}
 	}
 	memcpy(resMat, res, 16 * sizeof(FLOATTYPE));
+}
+
+static double mat3Determinant(const FLOATTYPE *mMat3x3)
+{
+	return mMat3x3[0] * (mMat3x3[4] * mMat3x3[8] - mMat3x3[5] * mMat3x3[7]) +
+		mMat3x3[1] * (mMat3x3[5] * mMat3x3[6] - mMat3x3[8] * mMat3x3[3]) +
+		mMat3x3[2] * (mMat3x3[3] * mMat3x3[7] - mMat3x3[4] * mMat3x3[6]);
+}
+
+static double mat4Determinant(const FLOATTYPE *matrix)
+{
+	FLOATTYPE mMat3x3_a[9] =
+	{
+		matrix[1 * 4 + 1], matrix[2 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[1 * 4 + 2], matrix[2 * 4 + 2], matrix[3 * 4 + 2],
+		matrix[1 * 4 + 3], matrix[2 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_b[9] =
+	{
+		matrix[1 * 4 + 0], matrix[2 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[1 * 4 + 2], matrix[2 * 4 + 2], matrix[3 * 4 + 2],
+		matrix[1 * 4 + 3], matrix[2 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_c[9] =
+	{
+		matrix[1 * 4 + 0], matrix[2 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[1 * 4 + 1], matrix[2 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[1 * 4 + 3], matrix[2 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_d[9] =
+	{
+		matrix[1 * 4 + 0], matrix[2 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[1 * 4 + 1], matrix[2 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[1 * 4 + 2], matrix[2 * 4 + 2], matrix[3 * 4 + 2]
+	};
+
+	FLOATTYPE a, b, c, d;
+	FLOATTYPE value;
+
+	a = mat3Determinant(mMat3x3_a);
+	b = mat3Determinant(mMat3x3_b);
+	c = mat3Determinant(mMat3x3_c);
+	d = mat3Determinant(mMat3x3_d);
+
+	value = matrix[0 * 4 + 0] * a;
+	value -= matrix[0 * 4 + 1] * b;
+	value += matrix[0 * 4 + 2] * c;
+	value -= matrix[0 * 4 + 3] * d;
+
+	return value;
+}
+
+static void mat4Adjoint(const FLOATTYPE *matrix, FLOATTYPE *result)
+{
+	FLOATTYPE mMat3x3_a[9] =
+	{
+		matrix[1 * 4 + 1], matrix[2 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[1 * 4 + 2], matrix[2 * 4 + 2], matrix[3 * 4 + 2],
+		matrix[1 * 4 + 3], matrix[2 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_b[9] =
+	{
+		matrix[1 * 4 + 0], matrix[2 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[1 * 4 + 2], matrix[2 * 4 + 2], matrix[3 * 4 + 2],
+		matrix[1 * 4 + 3], matrix[2 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_c[9] =
+	{
+		matrix[1 * 4 + 0], matrix[2 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[1 * 4 + 1], matrix[2 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[1 * 4 + 3], matrix[2 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_d[9] =
+	{
+		matrix[1 * 4 + 0], matrix[2 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[1 * 4 + 1], matrix[2 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[1 * 4 + 2], matrix[2 * 4 + 2], matrix[3 * 4 + 2]
+	};
+
+	FLOATTYPE mMat3x3_e[9] =
+	{
+		matrix[0 * 4 + 1], matrix[2 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[0 * 4 + 2], matrix[2 * 4 + 2], matrix[3 * 4 + 2],
+		matrix[0 * 4 + 3], matrix[2 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_f[9] =
+	{
+		matrix[0 * 4 + 0], matrix[2 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[0 * 4 + 2], matrix[2 * 4 + 2], matrix[3 * 4 + 2],
+		matrix[0 * 4 + 3], matrix[2 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_g[9] =
+	{
+		matrix[0 * 4 + 0], matrix[2 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[0 * 4 + 1], matrix[2 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[0 * 4 + 3], matrix[2 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_h[9] =
+	{
+		matrix[0 * 4 + 0], matrix[2 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[0 * 4 + 1], matrix[2 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[0 * 4 + 2], matrix[2 * 4 + 2], matrix[3 * 4 + 2]
+	};
+
+	FLOATTYPE mMat3x3_i[9] =
+	{
+		matrix[0 * 4 + 1], matrix[1 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[0 * 4 + 2], matrix[1 * 4 + 2], matrix[3 * 4 + 2],
+		matrix[0 * 4 + 3], matrix[1 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_j[9] =
+	{
+		matrix[0 * 4 + 0], matrix[1 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[0 * 4 + 2], matrix[1 * 4 + 2], matrix[3 * 4 + 2],
+		matrix[0 * 4 + 3], matrix[1 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_k[9] =
+	{
+		matrix[0 * 4 + 0], matrix[1 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[0 * 4 + 1], matrix[1 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[0 * 4 + 3], matrix[1 * 4 + 3], matrix[3 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_l[9] =
+	{
+		matrix[0 * 4 + 0], matrix[1 * 4 + 0], matrix[3 * 4 + 0],
+		matrix[0 * 4 + 1], matrix[1 * 4 + 1], matrix[3 * 4 + 1],
+		matrix[0 * 4 + 2], matrix[1 * 4 + 2], matrix[3 * 4 + 2]
+	};
+
+	FLOATTYPE mMat3x3_m[9] =
+	{
+		matrix[0 * 4 + 1], matrix[1 * 4 + 1], matrix[2 * 4 + 1],
+		matrix[0 * 4 + 2], matrix[1 * 4 + 2], matrix[2 * 4 + 2],
+		matrix[0 * 4 + 3], matrix[1 * 4 + 3], matrix[2 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_n[9] =
+	{
+		matrix[0 * 4 + 0], matrix[1 * 4 + 0], matrix[2 * 4 + 0],
+		matrix[0 * 4 + 2], matrix[1 * 4 + 2], matrix[2 * 4 + 2],
+		matrix[0 * 4 + 3], matrix[1 * 4 + 3], matrix[2 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_o[9] =
+	{
+		matrix[0 * 4 + 0], matrix[1 * 4 + 0], matrix[2 * 4 + 0],
+		matrix[0 * 4 + 1], matrix[1 * 4 + 1], matrix[2 * 4 + 1],
+		matrix[0 * 4 + 3], matrix[1 * 4 + 3], matrix[2 * 4 + 3]
+	};
+
+	FLOATTYPE mMat3x3_p[9] =
+	{
+		matrix[0 * 4 + 0], matrix[1 * 4 + 0], matrix[2 * 4 + 0],
+		matrix[0 * 4 + 1], matrix[1 * 4 + 1], matrix[2 * 4 + 1],
+		matrix[0 * 4 + 2], matrix[1 * 4 + 2], matrix[2 * 4 + 2]
+	};
+
+	result[0 * 4 + 0] = mat3Determinant(mMat3x3_a);
+	result[1 * 4 + 0] = -mat3Determinant(mMat3x3_b);
+	result[2 * 4 + 0] = mat3Determinant(mMat3x3_c);
+	result[3 * 4 + 0] = -mat3Determinant(mMat3x3_d);
+	result[0 * 4 + 1] = -mat3Determinant(mMat3x3_e);
+	result[1 * 4 + 1] = mat3Determinant(mMat3x3_f);
+	result[2 * 4 + 1] = -mat3Determinant(mMat3x3_g);
+	result[3 * 4 + 1] = mat3Determinant(mMat3x3_h);
+	result[0 * 4 + 2] = mat3Determinant(mMat3x3_i);
+	result[1 * 4 + 2] = -mat3Determinant(mMat3x3_j);
+	result[2 * 4 + 2] = mat3Determinant(mMat3x3_k);
+	result[3 * 4 + 2] = -mat3Determinant(mMat3x3_l);
+	result[0 * 4 + 3] = -mat3Determinant(mMat3x3_m);
+	result[1 * 4 + 3] = mat3Determinant(mMat3x3_n);
+	result[2 * 4 + 3] = -mat3Determinant(mMat3x3_o);
+	result[3 * 4 + 3] = mat3Determinant(mMat3x3_p);
+}
+
+bool VSMatrix::inverseMatrix(VSMatrix &result)
+{
+	// Calculate mat4 determinant
+	FLOATTYPE det = mat4Determinant(mMatrix);
+
+	// Inverse unknown when determinant is close to zero
+	if (fabs(det) < 1e-15)
+	{
+		for (int i = 0; i < 16; i++)
+			result.mMatrix[i] = FLOATTYPE(0.0);
+		return false;
+	}
+	else
+	{
+		mat4Adjoint(mMatrix, result.mMatrix);
+
+		FLOATTYPE invDet = FLOATTYPE(1.0) / det;
+		for (int i = 0; i < 16; i++)
+		{
+			result.mMatrix[i] = result.mMatrix[i] * invDet;
+		}
+	}
+	return true;
 }

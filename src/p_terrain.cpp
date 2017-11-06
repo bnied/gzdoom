@@ -46,10 +46,12 @@
 #include "s_sound.h"
 #include "p_local.h"
 #include "templates.h"
+#include "actor.h"
+#include "vm.h"
 
 // MACROS ------------------------------------------------------------------
 
-#define SET_FIELD(type,val) *((type*)((BYTE *)fields + \
+#define SET_FIELD(type,val) *((type*)((uint8_t *)fields + \
 							parser[keyword].u.Offset)) = val;
 
 // TYPES -------------------------------------------------------------------
@@ -88,12 +90,12 @@ enum ETerrainKeywords
 enum EGenericType
 {
 	GEN_End,
-	GEN_Fixed,
 	GEN_Sound,
 	GEN_Byte,
 	GEN_Class,
 	GEN_Splash,
 	GEN_Float,
+	GEN_Double,
 	GEN_Time,
 	GEN_Bool,
 	GEN_Int,
@@ -121,7 +123,6 @@ static void ParseSplash (FScanner &sc);
 static void ParseTerrain (FScanner &sc);
 static void ParseFloor (FScanner &sc);
 static int FindSplash (FName name);
-static int FindTerrain (FName name);
 static void GenericParse (FScanner &sc, FGenericParse *parser, const char **keywords,
 	void *fields, const char *type, FName name);
 static void ParseDamage (FScanner &sc, int keyword, void *fields);
@@ -135,7 +136,7 @@ static void ParseDefault (FScanner &sc);
 FTerrainTypeArray TerrainTypes;
 TArray<FSplashDef> Splashes;
 TArray<FTerrainDef> Terrains;
-WORD DefaultTerrainType;
+uint16_t DefaultTerrainType;
 
 // PRIVATE DATA DEFINITIONS ------------------------------------------------
 
@@ -193,7 +194,7 @@ static FGenericParse SplashParser[] =
 {
 	{ GEN_End,	  {0} },
 	{ GEN_Sound,  {myoffsetof(FSplashDef, SmallSplashSound)} },
-	{ GEN_Fixed,  {myoffsetof(FSplashDef, SmallSplashClip)} },
+	{ GEN_Double, {myoffsetof(FSplashDef, SmallSplashClip)} },
 	{ GEN_Sound,  {myoffsetof(FSplashDef, NormalSplashSound)} },
 	{ GEN_Class,  {myoffsetof(FSplashDef, SmallSplash)} },
 	{ GEN_Class,  {myoffsetof(FSplashDef, SplashBase)} },
@@ -201,7 +202,7 @@ static FGenericParse SplashParser[] =
 	{ GEN_Byte,   {myoffsetof(FSplashDef, ChunkXVelShift)} },
 	{ GEN_Byte,   {myoffsetof(FSplashDef, ChunkYVelShift)} },
 	{ GEN_Byte,   {myoffsetof(FSplashDef, ChunkZVelShift)} },
-	{ GEN_Fixed,  {myoffsetof(FSplashDef, ChunkBaseZVel)} },
+	{ GEN_Double, {myoffsetof(FSplashDef, ChunkBaseZVel)} },
 	{ GEN_Bool,	  {myoffsetof(FSplashDef, NoAlert)} }
 };
 
@@ -212,7 +213,7 @@ static FGenericParse TerrainParser[] =
 	{ GEN_Int,    {myoffsetof(FTerrainDef, DamageAmount)} },
 	{ GEN_Custom, {(size_t)ParseDamage} },
 	{ GEN_Int,    {myoffsetof(FTerrainDef, DamageTimeMask)} },
-	{ GEN_Fixed,  {myoffsetof(FTerrainDef, FootClip)} },
+	{ GEN_Double, {myoffsetof(FTerrainDef, FootClip)} },
 	{ GEN_Float,  {myoffsetof(FTerrainDef, StepVolume)} },
 	{ GEN_Time,   {myoffsetof(FTerrainDef, WalkStepTics)} },
 	{ GEN_Time,   {myoffsetof(FTerrainDef, RunStepTics)} },
@@ -360,8 +361,8 @@ static void SetSplashDefaults (FSplashDef *splashdef)
 	splashdef->ChunkXVelShift =
 		splashdef->ChunkYVelShift =
 		splashdef->ChunkZVelShift = 8;
-	splashdef->ChunkBaseZVel = FRACUNIT;
-	splashdef->SmallSplashClip = 12*FRACUNIT;
+	splashdef->ChunkBaseZVel = 1;
+	splashdef->SmallSplashClip = 12.;
 	splashdef->NoAlert = false;
 }
 
@@ -427,7 +428,7 @@ void ParseTerrain (FScanner &sc)
 
 	sc.MustGetString ();
 	name = sc.String;
-	terrainnum = (int)FindTerrain (name);
+	terrainnum = (int)P_FindTerrain (name);
 	if (terrainnum < 0)
 	{
 		FTerrainDef def;
@@ -487,17 +488,17 @@ static void ParseDamage (FScanner &sc, int keyword, void *fields)
 static void ParseFriction (FScanner &sc, int keyword, void *fields)
 {
 	FTerrainDef *def = (FTerrainDef *)fields;
-	fixed_t friction, movefactor;
+	double friction, movefactor;
 
 	sc.MustGetFloat ();
 
 	// These calculations should match those in P_SetSectorFriction().
 	// A friction of 1.0 is equivalent to ORIG_FRICTION.
 
-	friction = (fixed_t)(0x1EB8*(sc.Float*100))/0x80 + 0xD001;
-	friction = clamp<fixed_t> (friction, 0, FRACUNIT);
+	friction = (0x1EB8*(sc.Float*100))/0x80 + 0xD001;
+	friction = clamp<double> (friction, 0, 65536.);
 
-	if (friction > ORIG_FRICTION)	// ice
+	if (friction > ORIG_FRICTION * 65536.)	// ice
 		movefactor = ((0x10092 - friction) * 1024) / 4352 + 568;
 	else
 		movefactor = ((friction - 0xDB34)*(0xA))/0x80;
@@ -505,8 +506,8 @@ static void ParseFriction (FScanner &sc, int keyword, void *fields)
 	if (movefactor < 32)
 		movefactor = 32;
 
-	def->Friction = friction;
-	def->MoveFactor = movefactor;
+	def->Friction = friction / 65536.;
+	def->MoveFactor = movefactor / 65536.;
 }
 
 //==========================================================================
@@ -533,11 +534,6 @@ static void GenericParse (FScanner &sc, FGenericParse *parser, const char **keyw
 			notdone = false;
 			break;
 
-		case GEN_Fixed:
-			sc.MustGetFloat ();
-			SET_FIELD (fixed_t, (fixed_t)(FRACUNIT * sc.Float));
-			break;
-
 		case GEN_Sound:
 			sc.MustGetString ();
 			SET_FIELD (FSoundID, FSoundID(sc.String));
@@ -552,7 +548,7 @@ static void GenericParse (FScanner &sc, FGenericParse *parser, const char **keyw
 
 		case GEN_Byte:
 			sc.MustGetNumber ();
-			SET_FIELD (BYTE, sc.Number);
+			SET_FIELD (uint8_t, sc.Number);
 			break;
 
 		case GEN_Class:
@@ -595,6 +591,11 @@ static void GenericParse (FScanner &sc, FGenericParse *parser, const char **keyw
 			SET_FIELD (float, float(sc.Float));
 			break;
 
+		case GEN_Double:
+			sc.MustGetFloat();
+			SET_FIELD(double, sc.Float);
+			break;
+
 		case GEN_Time:
 			sc.MustGetFloat ();
 			SET_FIELD (int, (int)(sc.Float * TICRATE));
@@ -627,17 +628,23 @@ static void ParseFloor (FScanner &sc)
 	FTextureID picnum;
 	int terrain;
 
+	bool opt = sc.CheckString("optional");
 	sc.MustGetString ();
+
 	picnum = TexMan.CheckForTexture (sc.String, FTexture::TEX_Flat,
 		FTextureManager::TEXMAN_Overridable|FTextureManager::TEXMAN_TryAny);
+
 	if (!picnum.Exists())
 	{
-		Printf ("Unknown flat %s\n", sc.String);
-		sc.MustGetString ();
+		if (!opt)
+		{
+			Printf("Unknown flat %s\n", sc.String);
+		}
+		sc.MustGetString();
 		return;
 	}
 	sc.MustGetString ();
-	terrain = FindTerrain (sc.String);
+	terrain = P_FindTerrain (sc.String);
 	if (terrain == -1)
 	{
 		Printf ("Unknown terrain %s\n", sc.String);
@@ -657,7 +664,7 @@ static void ParseDefault (FScanner &sc)
 	int terrain;
 
 	sc.MustGetString ();
-	terrain = FindTerrain (sc.String);
+	terrain = P_FindTerrain (sc.String);
 	if (terrain == -1)
 	{
 		Printf ("Unknown terrain %s\n", sc.String);
@@ -692,10 +699,11 @@ int FindSplash (FName name)
 //
 //==========================================================================
 
-int FindTerrain (FName name)
+int P_FindTerrain (FName name)
 {
 	unsigned int i;
 
+	if (name == NAME_Null) return -1;
 	for (i = 0; i < Terrains.Size (); i++)
 	{
 		if (Terrains[i].Name == name)
@@ -705,3 +713,31 @@ int FindTerrain (FName name)
 	}
 	return -1;
 }
+
+FName P_GetTerrainName(int terrainnum)
+{
+	if (terrainnum < 0 || terrainnum >= (int)Terrains.Size())
+	{
+		return NAME_Null;
+	}
+	else
+	{
+		return Terrains[terrainnum].Name;
+	}
+}
+
+DEFINE_FIELD_NAMED(FTerrainDef, Name, TerrainName)
+DEFINE_FIELD(FTerrainDef, Splash)
+DEFINE_FIELD(FTerrainDef, DamageAmount)
+DEFINE_FIELD(FTerrainDef, DamageMOD)
+DEFINE_FIELD(FTerrainDef, DamageTimeMask)
+DEFINE_FIELD(FTerrainDef, FootClip)
+DEFINE_FIELD(FTerrainDef, StepVolume)
+DEFINE_FIELD(FTerrainDef, WalkStepTics)
+DEFINE_FIELD(FTerrainDef, RunStepTics)
+DEFINE_FIELD(FTerrainDef, LeftStepSound)
+DEFINE_FIELD(FTerrainDef, RightStepSound)
+DEFINE_FIELD(FTerrainDef, IsLiquid)
+DEFINE_FIELD(FTerrainDef, AllowProtection)
+DEFINE_FIELD(FTerrainDef, Friction)
+DEFINE_FIELD(FTerrainDef, MoveFactor)

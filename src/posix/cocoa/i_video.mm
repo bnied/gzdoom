@@ -31,10 +31,9 @@
  **
  */
 
-#include "i_common.h"
+#include "gl/system/gl_load.h"
 
-#import <Carbon/Carbon.h>
-#import <OpenGL/gl.h>
+#include "i_common.h"
 
 // Avoid collision between DObject class and Objective-C
 #define Class ObjectClass
@@ -45,8 +44,10 @@
 #include "hardware.h"
 #include "i_system.h"
 #include "m_argv.h"
+#include "m_png.h"
 #include "r_renderer.h"
-#include "r_swrenderer.h"
+#include "swrenderer/r_swrenderer.h"
+#include "st_console.h"
 #include "stats.h"
 #include "textures.h"
 #include "v_palette.h"
@@ -55,19 +56,88 @@
 #include "v_video.h"
 #include "version.h"
 
+#include "gl/system/gl_system.h"
+#include "gl/data/gl_vertexbuffer.h"
+#include "gl/renderer/gl_renderer.h"
+#include "gl/system/gl_framebuffer.h"
+#include "gl/system/gl_interface.h"
+#include "gl/textures/gl_samplers.h"
+#include "gl/utility/gl_clock.h"
+
 #undef Class
 
+
+@implementation NSWindow(ExitAppOnClose)
+
+- (void)exitAppOnClose
+{
+	NSButton* closeButton = [self standardWindowButton:NSWindowCloseButton];
+	[closeButton setAction:@selector(terminate:)];
+	[closeButton setTarget:NSApp];
+}
+
+@end
+
+@interface NSWindow(EnterFullscreenOnZoom)
+- (void)enterFullscreenOnZoom;
+@end
+
+@implementation NSWindow(EnterFullscreenOnZoom)
+
+- (void)enterFullscreen:(id)sender
+{
+	ToggleFullscreen = true;
+}
+
+- (void)enterFullscreenOnZoom
+{
+	NSButton* zoomButton = [self standardWindowButton:NSWindowZoomButton];
+	[zoomButton setEnabled:YES];
+	[zoomButton setAction:@selector(enterFullscreen:)];
+	[zoomButton setTarget:self];
+}
+
+@end
+
+DFrameBuffer *CreateGLSWFrameBuffer(int width, int height, bool bgra, bool fullscreen);
+
+int currentrenderer;
+
+CUSTOM_CVAR(Bool, vid_glswfb, true, CVAR_NOINITCALL | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
+{
+	Printf("This won't take effect until " GAMENAME " is restarted.\n");
+}
 
 EXTERN_CVAR(Bool, ticker   )
 EXTERN_CVAR(Bool, vid_vsync)
 EXTERN_CVAR(Bool, vid_hidpi)
 
+#if defined __ppc__ || defined __ppc64__
+static const bool TRUECOLOR_DEFAULT = false;
+#else // other than PowerPC
+static const bool TRUECOLOR_DEFAULT = true;
+#endif // PowerPC
+
+CUSTOM_CVAR(Bool, swtruecolor, TRUECOLOR_DEFAULT, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
+{
+	// Strictly speaking this doesn't require a mode switch, but it is the easiest
+	// way to force a CreateFramebuffer call without a lot of refactoring.
+	if (currentrenderer == 0)
+	{
+		extern int NewWidth, NewHeight, NewBits, DisplayBits;
+		NewWidth      = screen->VideoWidth;
+		NewHeight     = screen->VideoHeight;
+		NewBits       = DisplayBits;
+		setmodeneeded = true;
+	}
+}
+
 CUSTOM_CVAR(Bool, fullscreen, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 {
 	extern int NewWidth, NewHeight, NewBits, DisplayBits;
 
-	NewWidth      = screen->GetWidth();
-	NewHeight     = screen->GetHeight();
+	NewWidth      = screen->VideoWidth;
+	NewHeight     = screen->VideoHeight;
 	NewBits       = DisplayBits;
 	setmodeneeded = true;
 }
@@ -76,6 +146,34 @@ CUSTOM_CVAR(Bool, vid_autoswitch, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_
 {
 	Printf("You must restart " GAMENAME " to apply graphics switching mode\n");
 }
+
+CUSTOM_CVAR(Int, vid_renderer, 1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
+{
+	// 0: Software renderer
+	// 1: OpenGL renderer
+
+	if (self != currentrenderer)
+	{
+		switch (self)
+		{
+			case 0:
+				Printf("Switching to software renderer...\n");
+				break;
+			case 1:
+				Printf("Switching to OpenGL renderer...\n");
+				break;
+			default:
+				Printf("Unknown renderer (%d). Falling back to software renderer...\n",
+					static_cast<int>(vid_renderer));
+				self = 0;
+				break;
+		}
+
+		Printf("You must restart " GAMENAME " to switch the renderer\n");
+	}
+}
+
+EXTERN_CVAR(Bool, gl_smooth_rendered)
 
 
 RenderBufferOptions rbOpts;
@@ -90,7 +188,7 @@ namespace
 	const NSInteger LEVEL_WINDOWED   = NSNormalWindowLevel;
 
 	const NSUInteger STYLE_MASK_FULLSCREEN = NSBorderlessWindowMask;
-	const NSUInteger STYLE_MASK_WINDOWED   = NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask;
+	const NSUInteger STYLE_MASK_WINDOWED   = NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask | NSResizableWindowMask;
 }
 
 
@@ -153,19 +251,18 @@ namespace
 @end
 
 
-
 // ---------------------------------------------------------------------------
 
 
 class CocoaVideo : public IVideo
 {
 public:
-	explicit CocoaVideo(int multisample);
+	CocoaVideo();
 
 	virtual EDisplayType GetDisplayType() { return DISPLAY_Both; }
 	virtual void SetWindowedScale(float scale);
 
-	virtual DFrameBuffer* CreateFrameBuffer(int width, int height, bool fs, DFrameBuffer* old);
+	virtual DFrameBuffer* CreateFrameBuffer(int width, int height, bool bgra, bool fs, DFrameBuffer* old);
 
 	virtual void StartModeIterator(int bits, bool fullscreen);
 	virtual bool NextMode(int* width, int* height, bool* letterbox);
@@ -192,7 +289,6 @@ private:
 	bool m_fullscreen;
 	bool m_hiDPI;
 
-	void SetStyleMask(NSUInteger styleMask);
 	void SetFullscreenMode(int width, int height);
 	void SetWindowedMode(int width, int height);
 	void SetMode(int width, int height, bool fullscreen, bool hiDPI);
@@ -201,10 +297,13 @@ private:
 };
 
 
+// ---------------------------------------------------------------------------
+
+
 class CocoaFrameBuffer : public DFrameBuffer
 {
 public:
-	CocoaFrameBuffer(int width, int height, bool fullscreen);
+	CocoaFrameBuffer(int width, int height, bool bgra, bool fullscreen);
 	~CocoaFrameBuffer();
 
 	virtual bool Lock(bool buffer);
@@ -231,14 +330,14 @@ private:
 	PalEntry m_palette[256];
 	bool     m_needPaletteUpdate;
 
-	BYTE     m_gammaTable[3][256];
+	uint8_t     m_gammaTable[3][256];
 	float    m_gamma;
 	bool     m_needGammaUpdate;
 
 	PalEntry m_flashColor;
 	int      m_flashAmount;
 
-	bool     m_isUpdatePending;
+	bool     UpdatePending;
 
 	uint8_t* m_pixelBuffer;
 	GLuint   m_texture;
@@ -323,6 +422,7 @@ VideoModes[] =
 	{ 1152,  648 },	// 16:9
 	{ 1152,  720 },	// 16:10
 	{ 1152,  864 },
+	{ 1280,  540 }, // 21:9
 	{ 1280,  720 },	// 16:9
 	{ 1280,  854 },
 	{ 1280,  800 },	// 16:10
@@ -345,15 +445,18 @@ VideoModes[] =
 	{ 2048, 1152 }, // 16:9, iMac Retina 4K 21.5", HiDPI off
 	{ 2048, 1536 },
 	{ 2304, 1440 }, // 16:10, MacBook Retina 12"
+	{ 2560, 1080 }, // 21:9
 	{ 2560, 1440 },
 	{ 2560, 1600 },
 	{ 2560, 2048 },
 	{ 2880, 1800 }, // 16:10, MacBook Pro Retina 15"
 	{ 3200, 1800 },
+	{ 3440, 1440 }, // 21:9
 	{ 3840, 2160 },
 	{ 3840, 2400 },
 	{ 4096, 2160 },
 	{ 4096, 2304 }, // 16:9, iMac Retina 4K 21.5"
+	{ 5120, 2160 }, // 21:9
 	{ 5120, 2880 }  // 16:9, iMac Retina 5K 27"
 };
 
@@ -379,23 +482,8 @@ CocoaWindow* CreateCocoaWindow(const NSUInteger styleMask)
 	return window;
 }
 
-} // unnamed namespace
-
-
-// ---------------------------------------------------------------------------
-
-
-CocoaVideo::CocoaVideo(const int multisample)
-: m_window(CreateCocoaWindow(STYLE_MASK_WINDOWED))
-, m_width(-1)
-, m_height(-1)
-, m_fullscreen(false)
-, m_hiDPI(false)
+NSOpenGLPixelFormat* CreatePixelFormat(const NSOpenGLPixelFormatAttribute profile)
 {
-	memset(&m_modeIterator, 0, sizeof m_modeIterator);
-
-	// Set attributes for OpenGL context
-
 	NSOpenGLPixelFormatAttribute attributes[16];
 	size_t i = 0;
 
@@ -406,26 +494,73 @@ CocoaVideo::CocoaVideo(const int multisample)
 	attributes[i++] = NSOpenGLPixelFormatAttribute(24);
 	attributes[i++] = NSOpenGLPFAStencilSize;
 	attributes[i++] = NSOpenGLPixelFormatAttribute(8);
-
+	attributes[i++] = NSOpenGLPFAOpenGLProfile;
+	attributes[i++] = profile;
+	
 	if (!vid_autoswitch)
 	{
 		attributes[i++] = NSOpenGLPFAAllowOfflineRenderers;
 	}
 
-	if (multisample)
-	{
-		attributes[i++] = NSOpenGLPFAMultisample;
-		attributes[i++] = NSOpenGLPFASampleBuffers;
-		attributes[i++] = NSOpenGLPixelFormatAttribute(1);
-		attributes[i++] = NSOpenGLPFASamples;
-		attributes[i++] = NSOpenGLPixelFormatAttribute(multisample);
-	}
-
 	attributes[i] = NSOpenGLPixelFormatAttribute(0);
 
-	// Create OpenGL context and view
+	return [[NSOpenGLPixelFormat alloc] initWithAttributes:attributes];
+}
 
-	NSOpenGLPixelFormat *pixelFormat = [[NSOpenGLPixelFormat alloc] initWithAttributes:attributes];
+} // unnamed namespace
+
+
+// ---------------------------------------------------------------------------
+
+
+CocoaVideo::CocoaVideo()
+: m_window(CreateCocoaWindow(STYLE_MASK_WINDOWED))
+, m_width(-1)
+, m_height(-1)
+, m_fullscreen(false)
+, m_hiDPI(false)
+{
+	memset(&m_modeIterator, 0, sizeof m_modeIterator);
+
+	extern void gl_CalculateCPUSpeed();
+	gl_CalculateCPUSpeed();
+
+	// Create OpenGL pixel format
+	NSOpenGLPixelFormatAttribute defaultProfile = NSOpenGLProfileVersion3_2Core;
+
+	if (1 == vid_renderer && NSAppKitVersionNumber < AppKit10_9)
+	{
+		// There is no support for OpenGL 3.3 before Mavericks
+		defaultProfile = NSOpenGLProfileVersionLegacy;
+	}
+	else if (0 == vid_renderer && 0 == vid_glswfb)
+	{
+		// Software renderer uses OpenGL 2.1 for blitting
+		defaultProfile = NSOpenGLProfileVersionLegacy;
+	}
+	else if (const char* const glversion = Args->CheckValue("-glversion"))
+	{
+		// Check for explicit version specified in command line
+		const double version = strtod(glversion, nullptr) + 0.01;
+		if (version < 3.3)
+		{
+			defaultProfile = NSOpenGLProfileVersionLegacy;
+		}
+	}
+
+	NSOpenGLPixelFormat* pixelFormat = CreatePixelFormat(defaultProfile);
+
+	if (nil == pixelFormat && NSOpenGLProfileVersion3_2Core == defaultProfile)
+	{
+		pixelFormat = CreatePixelFormat(NSOpenGLProfileVersionLegacy);
+
+		if (nil == pixelFormat)
+		{
+			I_FatalError("Cannot OpenGL create pixel format, graphics hardware is not supported");
+		}
+	}
+
+	// Create OpenGL context and view
 
 	const NSRect contentRect = [m_window contentRectForFrameRect:[m_window frame]];
 	NSOpenGLView* glView = [[CocoaView alloc] initWithFrame:contentRect
@@ -433,6 +568,8 @@ CocoaVideo::CocoaVideo(const int multisample)
 	[[glView openGLContext] makeCurrentContext];
 
 	[m_window setContentView:glView];
+
+	FConsoleWindow::GetInstance().Show(false);
 }
 
 void CocoaVideo::StartModeIterator(const int bits, const bool fullscreen)
@@ -478,21 +615,20 @@ bool CocoaVideo::NextMode(int* const width, int* const height, bool* const lette
 	return false;
 }
 
-DFrameBuffer* CocoaVideo::CreateFrameBuffer(const int width, const int height, const bool fullscreen, DFrameBuffer* const old)
+DFrameBuffer* CocoaVideo::CreateFrameBuffer(const int width, const int height, const bool bgra, const bool fullscreen, DFrameBuffer* const old)
 {
 	PalEntry flashColor  = 0;
 	int      flashAmount = 0;
 
 	if (NULL != old)
 	{
-		if (width == m_width && height == m_height)
+		if (width == m_width && height == m_height && bgra == old->IsBgra())
 		{
 			SetMode(width, height, fullscreen, vid_hidpi);
 			return old;
 		}
 
 		old->GetFlash(flashColor, flashAmount);
-		old->ObjectFlags |= OF_YesReallyDelete;
 
 		if (old == screen)
 		{
@@ -502,7 +638,28 @@ DFrameBuffer* CocoaVideo::CreateFrameBuffer(const int width, const int height, c
 		delete old;
 	}
 
-	CocoaFrameBuffer* fb = new CocoaFrameBuffer(width, height, fullscreen);
+	DFrameBuffer* fb = NULL;
+
+	if (1 == currentrenderer)
+ 	{
+		fb = new OpenGLFrameBuffer(NULL, width, height, 32, 60, fullscreen);
+	}
+	else if (vid_glswfb)
+	{
+		fb = CreateGLSWFrameBuffer(width, height, bgra, fullscreen);
+
+		if (!fb->IsValid())
+		{
+			delete fb;
+
+			fb = new CocoaFrameBuffer(width, height, bgra, fullscreen);
+		}
+	}
+	else
+	{
+		fb = new CocoaFrameBuffer(width, height, bgra, fullscreen);
+	}
+
 	fb->SetFlash(flashColor, flashAmount);
 
 	SetMode(width, height, fullscreen, vid_hidpi);
@@ -555,32 +712,11 @@ void CocoaVideo::SetWindowVisible(bool visible)
 		{
 			[video->m_window orderOut:nil];
 		}
+
+		I_SetNativeMouse(!visible);
 	}
 }
 
-
-static bool HasModernFullscreenAPI()
-{
-	// The following value shoud be equal to NSAppKitVersionNumber10_6
-	// and it's hard-coded in order to build on earlier SDKs
-
-	return NSAppKitVersionNumber >= 1038;
-}
-
-void CocoaVideo::SetStyleMask(const NSUInteger styleMask)
-{
-	// Before 10.6 it's impossible to change window's style mask
-	// To workaround this new window should be created with required style mask
-	// This method should not be called when running on Snow Leopard or newer
-
-	assert(!HasModernFullscreenAPI());
-
-	CocoaWindow* tempWindow = CreateCocoaWindow(styleMask);
-	[tempWindow setContentView:[m_window contentView]];
-
-	[m_window close];
-	m_window = tempWindow;
-}
 
 void CocoaVideo::SetFullscreenMode(const int width, const int height)
 {
@@ -607,26 +743,13 @@ void CocoaVideo::SetFullscreenMode(const int width, const int height)
 
 	if (!m_fullscreen)
 	{
-		if (HasModernFullscreenAPI())
-		{
-			[m_window setLevel:LEVEL_FULLSCREEN];
-			[m_window setStyleMask:STYLE_MASK_FULLSCREEN];
-		}
-		else
-		{
-			// Old Carbon-based way to make fullscreen window above dock and menu
-			// It's supported on 64-bit, but on 10.6 and later the following is preferred:
-			// [NSWindow setLevel:NSMainMenuWindowLevel + 1]
-
-			SetSystemUIMode(kUIModeAllHidden, 0);
-			SetStyleMask(STYLE_MASK_FULLSCREEN);
-		}
+		[m_window setLevel:LEVEL_FULLSCREEN];
+		[m_window setStyleMask:STYLE_MASK_FULLSCREEN];
 
 		[m_window setHidesOnDeactivate:YES];
 	}
 
-	[m_window setFrame:displayRect display:YES];
-	[m_window setFrameOrigin:NSMakePoint(0.0f, 0.0f)];
+	[m_window setFrame:screenFrame display:YES];
 }
 
 void CocoaVideo::SetWindowedMode(const int width, const int height)
@@ -646,26 +769,16 @@ void CocoaVideo::SetWindowedMode(const int width, const int height)
 
 	if (m_fullscreen)
 	{
-		if (HasModernFullscreenAPI())
-		{
-			[m_window setLevel:LEVEL_WINDOWED];
-			[m_window setStyleMask:STYLE_MASK_WINDOWED];
-		}
-		else
-		{
-			SetSystemUIMode(kUIModeNormal, 0);
-			SetStyleMask(STYLE_MASK_WINDOWED);
-		}
+		[m_window setLevel:LEVEL_WINDOWED];
+		[m_window setStyleMask:STYLE_MASK_WINDOWED];
 
 		[m_window setHidesOnDeactivate:NO];
 	}
 
 	[m_window setContentSize:windowSize];
 	[m_window center];
-
-	NSButton* closeButton = [m_window standardWindowButton:NSWindowCloseButton];
-	[closeButton setAction:@selector(terminate:)];
-	[closeButton setTarget:NSApp];
+	[m_window enterFullscreenOnZoom];
+	[m_window exitAppOnClose];
 }
 
 void CocoaVideo::SetMode(const int width, const int height, const bool fullscreen, const bool hiDPI)
@@ -678,11 +791,8 @@ void CocoaVideo::SetMode(const int width, const int height, const bool fullscree
 		return;
 	}
 
-	if (I_IsHiDPISupported())
-	{
-		NSOpenGLView* const glView = [m_window contentView];
-		[glView setWantsBestResolutionOpenGLSurface:hiDPI];
-	}
+	NSOpenGLView* const glView = [m_window contentView];
+	[glView setWantsBestResolutionOpenGLSurface:hiDPI];
 
 	if (fullscreen)
 	{
@@ -725,16 +835,30 @@ CocoaVideo* CocoaVideo::GetInstance()
 }
 
 
-CocoaFrameBuffer::CocoaFrameBuffer(int width, int height, bool fullscreen)
-: DFrameBuffer(width, height)
+// ---------------------------------------------------------------------------
+
+
+CocoaFrameBuffer::CocoaFrameBuffer(int width, int height, bool bgra, bool fullscreen)
+: DFrameBuffer(width, height, bgra)
 , m_needPaletteUpdate(false)
 , m_gamma(0.0f)
 , m_needGammaUpdate(false)
 , m_flashAmount(0)
-, m_isUpdatePending(false)
+, UpdatePending(false)
 , m_pixelBuffer(new uint8_t[width * height * BYTES_PER_PIXEL])
 , m_texture(0)
 {
+	static bool isOpenGLInitialized;
+
+	if (!isOpenGLInitialized)
+	{
+		if (ogl_LoadFunctions() == ogl_LOAD_FAILED)
+		{
+			I_FatalError("Failed to load OpenGL functions.");
+		}
+		isOpenGLInitialized = true;
+	}
+
 	glEnable(GL_TEXTURE_RECTANGLE_ARB);
 
 	glGenTextures(1, &m_texture);
@@ -787,7 +911,7 @@ bool CocoaFrameBuffer::Lock(bool buffered)
 
 void CocoaFrameBuffer::Unlock()
 {
-	if (m_isUpdatePending && LockCount == 1)
+	if (UpdatePending && LockCount == 1)
 	{
 		Update();
 	}
@@ -804,7 +928,7 @@ void CocoaFrameBuffer::Update()
 	{
 		if (LockCount > 0)
 		{
-			m_isUpdatePending = true;
+			UpdatePending = true;
 			--LockCount;
 		}
 		return;
@@ -814,14 +938,21 @@ void CocoaFrameBuffer::Update()
 
 	Buffer = NULL;
 	LockCount = 0;
-	m_isUpdatePending = false;
+	UpdatePending = false;
 
 	BlitCycles.Reset();
 	FlipCycles.Reset();
 	BlitCycles.Clock();
 
-	GPfx.Convert(MemBuffer, Pitch, m_pixelBuffer, Width * BYTES_PER_PIXEL,
-		Width, Height, FRACUNIT, FRACUNIT, 0, 0);
+	if (IsBgra())
+	{
+		CopyWithGammaBgra(m_pixelBuffer, Width * BYTES_PER_PIXEL, m_gammaTable[0], m_gammaTable[1], m_gammaTable[2], m_flashColor, m_flashAmount);
+	}
+	else
+	{
+		GPfx.Convert(MemBuffer, Pitch, m_pixelBuffer, Width * BYTES_PER_PIXEL,
+			Width, Height, FRACUNIT, FRACUNIT, 0, 0);
+	}
 
 	FlipCycles.Clock();
 	Flip();
@@ -921,11 +1052,7 @@ bool CocoaFrameBuffer::IsFullscreen()
 
 void CocoaFrameBuffer::SetVSync(bool vsync)
 {
-#if MAC_OS_X_VERSION_MAX_ALLOWED < 1050
-	const long value = vsync ? 1 : 0;
-#else // 10.5 or newer
 	const GLint value = vsync ? 1 : 0;
-#endif // prior to 10.5
 
 	[[NSOpenGLContext currentContext] setValues:&value
 								   forParameter:NSOpenGLCPSwapInterval];
@@ -953,8 +1080,10 @@ void CocoaFrameBuffer::Flip()
 	static const GLenum format = GL_ABGR_EXT;
 #endif // __LITTLE_ENDIAN__
 
-	glTexImage2D(GL_TEXTURE_RECTANGLE_ARB, 0, GL_RGBA8,
-		Width, Height, 0, format, GL_UNSIGNED_BYTE, m_pixelBuffer);
+	if (IsBgra())
+		glTexImage2D(GL_TEXTURE_RECTANGLE_ARB, 0, GL_RGBA8, Width, Height, 0, GL_BGRA, GL_UNSIGNED_BYTE, m_pixelBuffer);
+	else
+		glTexImage2D(GL_TEXTURE_RECTANGLE_ARB, 0, GL_RGBA8, Width, Height, 0, format, GL_UNSIGNED_BYTE, m_pixelBuffer);
 
 	glBegin(GL_QUADS);
 	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
@@ -974,6 +1103,149 @@ void CocoaFrameBuffer::Flip()
 }
 
 
+// ---------------------------------------------------------------------------
+
+
+SDLGLFB::SDLGLFB(void*, const int width, const int height, int, int, const bool fullscreen, bool bgra)
+: DFrameBuffer(width, height, bgra)
+, m_Lock(0)
+, UpdatePending(false)
+{
+	CGGammaValue gammaTable[GAMMA_TABLE_SIZE];
+	uint32_t actualChannelSize;
+
+	const CGError result = CGGetDisplayTransferByTable(kCGDirectMainDisplay, GAMMA_CHANNEL_SIZE,
+		gammaTable, &gammaTable[GAMMA_CHANNEL_SIZE], &gammaTable[GAMMA_CHANNEL_SIZE * 2], &actualChannelSize);
+	m_supportsGamma = kCGErrorSuccess == result && GAMMA_CHANNEL_SIZE == actualChannelSize;
+
+	if (m_supportsGamma)
+	{
+		for (uint32_t i = 0; i < GAMMA_TABLE_SIZE; ++i)
+		{
+			m_originalGamma[i] = static_cast<uint16_t>(gammaTable[i] * 65535.0f);
+		}
+	}
+}
+
+SDLGLFB::SDLGLFB()
+{
+}
+
+SDLGLFB::~SDLGLFB()
+{
+}
+
+
+bool SDLGLFB::Lock(bool buffered)
+{
+	m_Lock++;
+
+	Buffer = MemBuffer;
+
+	return true;
+}
+
+void SDLGLFB::Unlock()
+{
+	if (UpdatePending && 1 == m_Lock)
+	{
+		Update();
+	}
+	else if (--m_Lock <= 0)
+	{
+		m_Lock = 0;
+	}
+}
+
+bool SDLGLFB::IsLocked()
+{
+	return m_Lock > 0;
+}
+
+
+bool SDLGLFB::IsFullscreen()
+{
+	return CocoaVideo::IsFullscreen();
+}
+
+void SDLGLFB::SetVSync(bool vsync)
+{
+	const GLint value = vsync ? 1 : 0;
+
+	[[NSOpenGLContext currentContext] setValues:&value
+								   forParameter:NSOpenGLCPSwapInterval];
+}
+
+
+void SDLGLFB::InitializeState()
+{
+}
+
+bool SDLGLFB::CanUpdate()
+{
+	if (m_Lock != 1)
+	{
+		if (m_Lock > 0)
+		{
+			UpdatePending = true;
+			--m_Lock;
+		}
+
+		return false;
+	}
+
+	return true;
+}
+
+void SDLGLFB::SwapBuffers()
+{
+	[[NSOpenGLContext currentContext] flushBuffer];
+}
+
+void SDLGLFB::SetGammaTable(uint16_t* table)
+{
+	if (m_supportsGamma)
+	{
+		CGGammaValue gammaTable[GAMMA_TABLE_SIZE];
+
+		for (uint32_t i = 0; i < GAMMA_TABLE_SIZE; ++i)
+		{
+			gammaTable[i] = static_cast<CGGammaValue>(table[i] / 65535.0f);
+		}
+
+		CGSetDisplayTransferByTable(kCGDirectMainDisplay, GAMMA_CHANNEL_SIZE,
+			gammaTable, &gammaTable[GAMMA_CHANNEL_SIZE], &gammaTable[GAMMA_CHANNEL_SIZE * 2]);
+	}
+}
+
+void SDLGLFB::ResetGammaTable()
+{
+	if (m_supportsGamma)
+	{
+		SetGammaTable(m_originalGamma);
+	}
+}
+
+int SDLGLFB::GetClientWidth()
+{
+	NSView *view = [[NSOpenGLContext currentContext] view];
+	NSRect backingBounds = [view convertRectToBacking: [view bounds]];
+	int clientWidth = (int)backingBounds.size.width;
+	return clientWidth > 0 ? clientWidth : Width;
+}
+
+int SDLGLFB::GetClientHeight()
+{
+	NSView *view = [[NSOpenGLContext currentContext] view];
+	NSRect backingBounds = [view convertRectToBacking: [view bounds]];
+	int clientHeight = (int)backingBounds.size.height;
+	return clientHeight > 0 ? clientHeight : Height;
+}
+
+
+// ---------------------------------------------------------------------------
+
+
 ADD_STAT(blit)
 {
 	FString result;
@@ -985,11 +1257,13 @@ ADD_STAT(blit)
 IVideo* Video;
 
 
+// ---------------------------------------------------------------------------
+
+
 void I_ShutdownGraphics()
 {
 	if (NULL != screen)
 	{
-		screen->ObjectFlags |= OF_YesReallyDelete;
 		delete screen;
 		screen = NULL;
 	}
@@ -1005,7 +1279,7 @@ void I_InitGraphics()
 	val.Bool = !!Args->CheckParm("-devparm");
 	ticker.SetGenericRepDefault(val, CVAR_Bool);
 
-	Video = new CocoaVideo(0);
+	Video = new CocoaVideo;
 	atterm(I_ShutdownGraphics);
 }
 
@@ -1018,9 +1292,15 @@ static void I_DeleteRenderer()
 
 void I_CreateRenderer()
 {
+	currentrenderer = vid_renderer;
+
 	if (NULL == Renderer)
 	{
-		Renderer = new FSoftwareRenderer;
+		extern FRenderer* gl_CreateInterface();
+
+		Renderer = 1 == currentrenderer
+			? gl_CreateInterface()
+			: new FSoftwareRenderer;
 		atterm(I_DeleteRenderer);
 	}
 }
@@ -1028,7 +1308,7 @@ void I_CreateRenderer()
 
 DFrameBuffer* I_SetMode(int &width, int &height, DFrameBuffer* old)
 {
-	return Video->CreateFrameBuffer(width, height, fullscreen, old);
+	return Video->CreateFrameBuffer(width, height, swtruecolor, fullscreen, old);
 }
 
 bool I_CheckResolution(const int width, const int height, const int bits)
@@ -1053,7 +1333,7 @@ void I_ClosestResolution(int *width, int *height, int bits)
 	int twidth, theight;
 	int cwidth = 0, cheight = 0;
 	int iteration;
-	DWORD closest = DWORD(-1);
+	uint32_t closest = uint32_t(-1);
 
 	for (iteration = 0; iteration < 2; ++iteration)
 	{
@@ -1071,7 +1351,7 @@ void I_ClosestResolution(int *width, int *height, int bits)
 				continue;
 			}
 
-			const DWORD dist = (twidth - *width) * (twidth - *width)
+			const uint32_t dist = (twidth - *width) * (twidth - *width)
 				+ (theight - *height) * (theight - *height);
 
 			if (dist < closest)
@@ -1082,7 +1362,7 @@ void I_ClosestResolution(int *width, int *height, int bits)
 			}
 		}
 
-		if (closest != DWORD(-1))
+		if (closest != uint32_t(-1))
 		{
 			*width = cwidth;
 			*height = cheight;
@@ -1090,6 +1370,9 @@ void I_ClosestResolution(int *width, int *height, int bits)
 		}
 	}
 }
+
+
+// ---------------------------------------------------------------------------
 
 
 EXTERN_CVAR(Int, vid_maxfps);
@@ -1119,15 +1402,11 @@ CUSTOM_CVAR(Int, vid_maxfps, 200, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
 CUSTOM_CVAR(Bool, vid_hidpi, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 {
-	if (I_IsHiDPISupported())
-	{
-		CocoaVideo::UseHiDPI(self);
-	}
-	else if (0 != self)
-	{
-		self = 0;
-	}
+	CocoaVideo::UseHiDPI(self);
 }
+
+
+// ---------------------------------------------------------------------------
 
 
 CCMD(vid_listmodes)
@@ -1137,7 +1416,7 @@ CCMD(vid_listmodes)
 		return;
 	}
 
-	static const char* const ratios[5] = { "", " - 16:9", " - 16:10", " - 17:10", " - 5:4" };
+	static const char* const ratios[7] = { "", " - 16:9", " - 16:10", " - 17:10", " - 5:4", "", " - 21:9" };
 	int width, height;
 	bool letterbox;
 
@@ -1191,7 +1470,7 @@ bool I_SetCursor(FTexture* cursorpic)
 
 		// Load bitmap data to representation
 
-		BYTE* buffer = [bitmapImageRep bitmapData];
+		uint8_t* buffer = [bitmapImageRep bitmapData];
 		memset(buffer, 0, imagePitch * imageHeight);
 
 		FBitmap bitmap(buffer, imagePitch, imageWidth, imageHeight);
@@ -1203,7 +1482,7 @@ bool I_SetCursor(FTexture* cursorpic)
 		{
 			const size_t offset = i * 4;
 
-			const BYTE temp    = buffer[offset    ];
+			const uint8_t temp    = buffer[offset    ];
 			buffer[offset    ] = buffer[offset + 2];
 			buffer[offset + 2] = temp;
 		}
@@ -1211,7 +1490,7 @@ bool I_SetCursor(FTexture* cursorpic)
 		// Create image from representation and set it as cursor
 
 		NSData* imageData = [bitmapImageRep representationUsingType:NSPNGFileType
-														 properties:nil];
+														 properties:[NSDictionary dictionary]];
 		NSImage* cursorImage = [[NSImage alloc] initWithData:imageData];
 
 		cursor = [[NSCursor alloc] initWithImage:cursorImage
@@ -1231,10 +1510,7 @@ NSSize I_GetContentViewSize(const NSWindow* const window)
 	const NSView* const view = [window contentView];
 	const NSSize frameSize   = [view frame].size;
 
-	// TODO: figure out why [NSView frame] returns different values in "fullscreen" and in window
-	// In "fullscreen" the result is multiplied by [NSScreen backingScaleFactor], but not in window
-
-	return (vid_hidpi && !fullscreen)
+	return (vid_hidpi)
 		? [view convertSizeToBacking:frameSize]
 		: frameSize;
 }
@@ -1242,5 +1518,4 @@ NSSize I_GetContentViewSize(const NSWindow* const window)
 void I_SetMainWindowVisible(bool visible)
 {
 	CocoaVideo::SetWindowVisible(visible);
-	I_SetNativeMouse(!visible);
 }

@@ -37,17 +37,17 @@
 #include "p_local.h"
 #include "statnums.h"
 #include "i_system.h"
-#include "thingdef/thingdef.h"
 #include "doomstat.h"
-#include "farchive.h"
+#include "serializer.h"
+#include "a_pickups.h"
+#include "vm.h"
 
 static FRandom pr_spot ("SpecialSpot");
 static FRandom pr_spawnmace ("SpawnMace");
 
-
-IMPLEMENT_CLASS(DSpotState)
-IMPLEMENT_CLASS (ASpecialSpot)
-TObjPtr<DSpotState> DSpotState::SpotState;
+IMPLEMENT_CLASS(DSpotState, false, false)
+IMPLEMENT_CLASS(ASpecialSpot, false, false)
+TObjPtr<DSpotState*> DSpotState::SpotState;
 
 //----------------------------------------------------------------------------
 //
@@ -57,7 +57,7 @@ TObjPtr<DSpotState> DSpotState::SpotState;
 
 struct FSpotList
 {
-	const PClass *Type;
+	PClassActor *Type;
 	TArray<ASpecialSpot*> Spots;
 	unsigned Index;
 	int SkipCount;
@@ -67,23 +67,12 @@ struct FSpotList
 	{
 	}
 
-	FSpotList(const PClass *type)
+	FSpotList(PClassActor *type)
 	{
 		Type = type;
 		Index = 0;
 		SkipCount = 0;
 		numcalls = 0;
-	}
-
-	//----------------------------------------------------------------------------
-	//
-	// 
-	//
-	//----------------------------------------------------------------------------
-
-	void Serialize(FArchive &arc)
-	{
-		arc << Type << Spots << Index << SkipCount << numcalls;
 	}
 
 	//----------------------------------------------------------------------------
@@ -148,17 +137,17 @@ struct FSpotList
 	//
 	//----------------------------------------------------------------------------
 
-	ASpecialSpot *GetSpotWithMinMaxDistance(fixed_t x, fixed_t y, fixed_t mindist, fixed_t maxdist)
+	ASpecialSpot *GetSpotWithMinMaxDistance(double x, double y, double mindist, double maxdist)
 	{
 		if (Spots.Size() == 0) return NULL;
 		int i = pr_spot() % Spots.Size();
 		int initial = i;
 
-		fixed_t distance;
+		double distance;
 
 		while (true)
 		{
-			distance = P_AproxDistance(Spots[i]->x - x, Spots[i]->y - y);
+			distance = Spots[i]->Distance2D(x, y);
 
 			if ((distance >= mindist) && ((maxdist == 0) || (distance <= maxdist))) break;
 
@@ -193,6 +182,26 @@ struct FSpotList
 //
 //----------------------------------------------------------------------------
 
+FSerializer &Serialize(FSerializer &arc, const char *key, FSpotList &list, FSpotList *def)
+{
+	if (arc.BeginObject(key))
+	{
+		arc("type", list.Type)
+			("spots", list.Spots)
+			("index", list.Index)
+			("skipcount", list.SkipCount)
+			("numcalls", list.numcalls)
+			.EndObject();
+	}
+	return arc;
+}
+
+//----------------------------------------------------------------------------
+//
+// 
+//
+//----------------------------------------------------------------------------
+
 DSpotState::DSpotState ()
 : DThinker (STAT_INFO)
 {
@@ -212,17 +221,13 @@ DSpotState::DSpotState ()
 //
 //----------------------------------------------------------------------------
 
-void DSpotState::Destroy ()
+void DSpotState::OnDestroy ()
 {
-	for(unsigned i = 0; i < SpotLists.Size(); i++)
-	{
-		delete SpotLists[i];
-	}
 	SpotLists.Clear();
 	SpotLists.ShrinkToFit();
 
 	SpotState = NULL;
-	Super::Destroy();
+	Super::OnDestroy();
 }
 
 //----------------------------------------------------------------------------
@@ -243,8 +248,14 @@ void DSpotState::Tick ()
 
 DSpotState *DSpotState::GetSpotState(bool create)
 {
-	if (SpotState == NULL && create) SpotState = new DSpotState;
+	if (SpotState == NULL && create) SpotState = Create<DSpotState>();
 	return SpotState;
+}
+
+DEFINE_ACTION_FUNCTION(DSpotState, GetSpotState)
+{
+	PARAM_PROLOGUE;
+	ACTION_RETURN_OBJECT(DSpotState::GetSpotState());
 }
 
 //----------------------------------------------------------------------------
@@ -253,13 +264,14 @@ DSpotState *DSpotState::GetSpotState(bool create)
 //
 //----------------------------------------------------------------------------
 
-FSpotList *DSpotState::FindSpotList(const PClass *type)
+FSpotList *DSpotState::FindSpotList(PClassActor *type)
 {
+	if (type == nullptr) return nullptr;
 	for(unsigned i = 0; i < SpotLists.Size(); i++)
 	{
-		if (SpotLists[i]->Type == type) return SpotLists[i];
+		if (SpotLists[i].Type == type) return &SpotLists[i];
 	}
-	return SpotLists[SpotLists.Push(new FSpotList(type))];
+	return &SpotLists[SpotLists.Push(FSpotList(type))];
 }
 
 //----------------------------------------------------------------------------
@@ -270,7 +282,7 @@ FSpotList *DSpotState::FindSpotList(const PClass *type)
 
 bool DSpotState::AddSpot(ASpecialSpot *spot)
 {
-	FSpotList *list = FindSpotList(RUNTIME_TYPE(spot));
+	FSpotList *list = FindSpotList(spot->GetClass());
 	if (list != NULL) return list->Add(spot);
 	return false;
 }
@@ -283,7 +295,7 @@ bool DSpotState::AddSpot(ASpecialSpot *spot)
 
 bool DSpotState::RemoveSpot(ASpecialSpot *spot)
 {
-	FSpotList *list = FindSpotList(RUNTIME_TYPE(spot));
+	FSpotList *list = FindSpotList(spot->GetClass());
 	if (list != NULL) return list->Remove(spot);
 	return false;
 }
@@ -294,27 +306,10 @@ bool DSpotState::RemoveSpot(ASpecialSpot *spot)
 //
 //----------------------------------------------------------------------------
 
-void DSpotState::Serialize(FArchive &arc)
+void DSpotState::Serialize(FSerializer &arc)
 {
 	Super::Serialize(arc);
-	if (arc.IsStoring())
-	{
-		arc.WriteCount(SpotLists.Size());
-		for(unsigned i = 0; i < SpotLists.Size(); i++)
-		{
-			SpotLists[i]->Serialize(arc);
-		}
-	}
-	else
-	{
-		unsigned c = arc.ReadCount();
-		SpotLists.Resize(c);
-		for(unsigned i = 0; i < SpotLists.Size(); i++)
-		{
-			SpotLists[i] = new FSpotList;
-			SpotLists[i]->Serialize(arc);
-		}
-	}
+	arc("spots", SpotLists);
 }
 
 //----------------------------------------------------------------------------
@@ -323,24 +318,19 @@ void DSpotState::Serialize(FArchive &arc)
 //
 //----------------------------------------------------------------------------
 
-ASpecialSpot *DSpotState::GetNextInList(const PClass *type, int skipcounter)
+ASpecialSpot *DSpotState::GetNextInList(PClassActor *type, int skipcounter)
 {
 	FSpotList *list = FindSpotList(type);
 	if (list != NULL) return list->GetNextInList(skipcounter);
 	return NULL;
 }
 
-//----------------------------------------------------------------------------
-//
-// 
-//
-//----------------------------------------------------------------------------
-
-ASpecialSpot *DSpotState::GetSpotWithMinMaxDistance(const PClass *type, fixed_t x, fixed_t y, fixed_t mindist, fixed_t maxdist)
+DEFINE_ACTION_FUNCTION(DSpotState, GetNextInList)
 {
-	FSpotList *list = FindSpotList(type);
-	if (list != NULL) return list->GetSpotWithMinMaxDistance(x, y, mindist, maxdist);
-	return NULL;
+	PARAM_SELF_PROLOGUE(DSpotState);
+	PARAM_CLASS(type, AActor);
+	PARAM_INT(skipcounter);
+	ACTION_RETURN_OBJECT(self->GetNextInList(type, skipcounter));
 }
 
 //----------------------------------------------------------------------------
@@ -349,7 +339,32 @@ ASpecialSpot *DSpotState::GetSpotWithMinMaxDistance(const PClass *type, fixed_t 
 //
 //----------------------------------------------------------------------------
 
-ASpecialSpot *DSpotState::GetRandomSpot(const PClass *type, bool onlyonce)
+ASpecialSpot *DSpotState::GetSpotWithMinMaxDistance(PClassActor *type, double x, double y, double mindist, double maxdist)
+{
+	FSpotList *list = FindSpotList(type);
+	if (list != NULL) return list->GetSpotWithMinMaxDistance(x, y, mindist, maxdist);
+	return NULL;
+}
+
+DEFINE_ACTION_FUNCTION(DSpotState, GetSpotWithMinMaxDistance)
+{
+	PARAM_SELF_PROLOGUE(DSpotState);
+	PARAM_CLASS(type, AActor);
+	PARAM_FLOAT(x);
+	PARAM_FLOAT(y);
+	PARAM_FLOAT(mindist);
+	PARAM_FLOAT(maxdist);
+	ACTION_RETURN_OBJECT(self->GetSpotWithMinMaxDistance(type, x, y, mindist, maxdist));
+}
+
+
+//----------------------------------------------------------------------------
+//
+// 
+//
+//----------------------------------------------------------------------------
+
+ASpecialSpot *DSpotState::GetRandomSpot(PClassActor *type, bool onlyonce)
 {
 	FSpotList *list = FindSpotList(type);
 	if (list != NULL) return list->GetRandomSpot(onlyonce);
@@ -375,60 +390,59 @@ void ASpecialSpot::BeginPlay()
 //
 //----------------------------------------------------------------------------
 
-void ASpecialSpot::Destroy()
+void ASpecialSpot::OnDestroy()
 {
 	DSpotState *state = DSpotState::GetSpotState(false);
 	if (state != NULL) state->RemoveSpot(this);
-	Super::Destroy();
+	Super::OnDestroy();
 }
 
 // Mace spawn spot ----------------------------------------------------------
-
 
 // Every mace spawn spot will execute this action. The first one
 // will build a list of all mace spots in the level and spawn a
 // mace. The rest of the spots will do nothing.
 
-DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_SpawnSingleItem)
+DEFINE_ACTION_FUNCTION(ASpecialSpot, A_SpawnSingleItem)
 {
+	PARAM_SELF_PROLOGUE(ASpecialSpot);
+	PARAM_CLASS_NOT_NULL(cls, AActor);
+	PARAM_INT_DEF	(fail_sp) 
+	PARAM_INT_DEF	(fail_co) 
+	PARAM_INT_DEF	(fail_dm) 
+
 	AActor *spot = NULL;
 	DSpotState *state = DSpotState::GetSpotState();
 
-	if (state != NULL) spot = state->GetRandomSpot(RUNTIME_TYPE(self), true);
-	if (spot == NULL) return;
-
-	ACTION_PARAM_START(4);
-	ACTION_PARAM_CLASS(cls, 0);
-	ACTION_PARAM_INT(fail_sp, 1);
-	ACTION_PARAM_INT(fail_co, 2);
-	ACTION_PARAM_INT(fail_dm, 3);
+	if (state != NULL) spot = state->GetRandomSpot(self->GetClass(), true);
+	if (spot == NULL) return 0;
 
 	if (!multiplayer && pr_spawnmace() < fail_sp)
 	{ // Sometimes doesn't show up if not in deathmatch
-		return;
+		return 0;
 	}
 
 	if (multiplayer && !deathmatch && pr_spawnmace() < fail_co)
 	{
-		return;
+		return 0;
 	}
 
 	if (deathmatch && pr_spawnmace() < fail_dm)
 	{
-		return;
+		return 0;
 	}
 
 	if (cls == NULL)
 	{
-		return;
+		return 0;
 	}
 
-	AActor *spawned = Spawn(cls, self->x, self->y, self->z, ALLOW_REPLACE);
+	AActor *spawned = Spawn(cls, self->Pos(), ALLOW_REPLACE);
 
 	if (spawned)
 	{
-		spawned->SetOrigin (spot->x, spot->y, spot->z);
-		spawned->z = spawned->floorz;
+		spawned->SetOrigin (spot->Pos(), false);
+		spawned->SetZ(spawned->floorz);
 		// We want this to respawn.
 		if (!(self->flags & MF_DROPPED)) 
 		{
@@ -436,8 +450,9 @@ DEFINE_ACTION_FUNCTION_PARAMS(AActor, A_SpawnSingleItem)
 		}
 		if (spawned->IsKindOf(RUNTIME_CLASS(AInventory)))
 		{
-			static_cast<AInventory*>(spawned)->SpawnPointClass = RUNTIME_TYPE(self);
+			static_cast<AInventory*>(spawned)->SpawnPointClass = self->GetClass();
 		}
 	}
+	return 0;
 }
 

@@ -24,7 +24,9 @@
 
 #include <stdio.h>
 #pragma once
+#ifdef _MSC_VER
 #pragma warning(disable: 4103)
+#endif // _MSC_VER
 #pragma pack(1)
 
 namespace HQnX_asm
@@ -145,6 +147,6 @@ class CImage
     char             m_cBuf[32768];
 };
 
-#pragma pack(8)
+#pragma pack()
 
 }

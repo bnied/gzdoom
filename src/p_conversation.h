@@ -9,11 +9,10 @@
 struct FStrifeDialogueReply;
 class FTexture;
 struct FBrokenLines;
-struct PClass;
 
 struct FStrifeDialogueItemCheck
 {
-	const PClass *Item;
+	PClassActor *Item;
 	int Amount;
 };
 
@@ -21,46 +20,50 @@ struct FStrifeDialogueItemCheck
 struct FStrifeDialogueNode
 {
 	~FStrifeDialogueNode ();
-	const PClass *DropType;
+	PClassActor *DropType = nullptr;
 	TArray<FStrifeDialogueItemCheck> ItemCheck;
-	int ThisNodeNum;	// location of this node in StrifeDialogues
-	int ItemCheckNode;	// index into StrifeDialogues
+	int ThisNodeNum = 0;	// location of this node in StrifeDialogues
+	int ItemCheckNode = 0;	// index into StrifeDialogues
 
-	const PClass *SpeakerType;
-	char *SpeakerName;
+	PClassActor *SpeakerType = nullptr;
+	FString SpeakerName;
 	FSoundID SpeakerVoice;
-	FTextureID Backdrop;
-	char *Dialogue;
+	FString Backdrop;
+	FString Dialogue;
+	FString Goodbye; // must init to null for binary scripts to work as intended
 
-	FStrifeDialogueReply *Children;
+	FStrifeDialogueReply *Children = nullptr;
+	FName MenuClassName;
+	FString UserData;
 };
 
 // FStrifeDialogueReply holds responses the player can give to the NPC
 struct FStrifeDialogueReply
 {
-	~FStrifeDialogueReply ();
-
-	FStrifeDialogueReply *Next;
-	const PClass *GiveType;
-	int ActionSpecial;
-	int Args[5];
+	FStrifeDialogueReply *Next = nullptr;
+	PClassActor *GiveType = nullptr;
+	int ActionSpecial = 0;
+	int Args[5] = {};
+	int PrintAmount = 0;
 	TArray<FStrifeDialogueItemCheck> ItemCheck;
-	char *Reply;
-	char *QuickYes;
-	int NextNode;	// index into StrifeDialogues
-	int LogNumber;
-	char *LogString;
-	char *QuickNo;
-	bool NeedsGold;
+	TArray<FStrifeDialogueItemCheck> ItemCheckRequire;
+	TArray<FStrifeDialogueItemCheck> ItemCheckExclude;
+	FString Reply;
+	FString QuickYes;
+	FString QuickNo;
+	FString LogString;
+	int NextNode = 0;	// index into StrifeDialogues
+	int LogNumber = 0;
+	bool NeedsGold = false;
 };
 
 extern TArray<FStrifeDialogueNode *> StrifeDialogues;
 
 struct MapData;
 
-void SetStrifeType(int convid, const PClass *Class);
-void SetConversation(int convid, const PClass *Class, int dlgindex);
-const PClass *GetStrifeType (int typenum);
+void SetStrifeType(int convid, PClassActor *Class);
+void SetConversation(int convid, PClassActor *Class, int dlgindex);
+PClassActor *GetStrifeType (int typenum);
 int GetConversation(int conv_id);
 int GetConversation(FName classname);
 
@@ -72,7 +75,7 @@ void P_FreeStrifeConversations ();
 void P_StartConversation (AActor *npc, AActor *pc, bool facetalker, bool saveangle);
 void P_ResumeConversation ();
 
-void P_ConversationCommand (int netcode, int player, BYTE **stream);
+void P_ConversationCommand (int netcode, int player, uint8_t **stream);
 
 class FileReader;
 bool P_ParseUSDF(int lumpnum, FileReader *lump, int lumplen);

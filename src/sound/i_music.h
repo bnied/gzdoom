@@ -35,6 +35,7 @@
 #define __I_MUSIC_H__
 
 #include "doomdef.h"
+#include "i_soundinternal.h"
 
 class FileReader;
 struct FOptionValues;
@@ -43,7 +44,8 @@ struct FOptionValues;
 //	MUSIC I/O
 //
 void I_InitMusic ();
-void I_ShutdownMusic ();
+void I_ShutdownMusic (bool onexit = false);
+void I_ShutdownMusicExit ();
 void I_BuildMIDIMenuList (FOptionValues *);
 void I_UpdateMusic ();
 
@@ -52,9 +54,9 @@ void I_SetMusicVolume (float volume);
 
 // Registers a song handle to song data.
 class MusInfo;
-MusInfo *I_RegisterSong (FileReader *reader, int device);
+struct MidiDeviceSetting;
+MusInfo *I_RegisterSong (FileReader *reader, MidiDeviceSetting *device);
 MusInfo *I_RegisterCDSong (int track, int cdid = 0);
-MusInfo *I_RegisterURLSong (const char *url);
 
 // The base music class. Everything is derived from this --------------------
 
@@ -75,12 +77,15 @@ public:
 	virtual bool SetPosition (unsigned int ms);
 	virtual bool SetSubsong (int subsong);
 	virtual void Update();
+	virtual int GetDeviceType() const { return MDEV_DEFAULT; }	// MDEV_DEFAULT stands in for anything that cannot change playback parameters which needs a restart.
 	virtual FString GetStats();
 	virtual MusInfo *GetOPLDumper(const char *filename);
 	virtual MusInfo *GetWaveDumper(const char *filename, int rate);
 	virtual void FluidSettingInt(const char *setting, int value);			// FluidSynth settings
 	virtual void FluidSettingNum(const char *setting, double value);		// "
 	virtual void FluidSettingStr(const char *setting, const char *value);	// "
+	virtual void WildMidiSetOption(int opt, int set);
+	virtual void GMEDepthChanged(float val);
 
 	void Start(bool loop, float rel_vol = -1.f, int subsong = 0);
 

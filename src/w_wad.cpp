@@ -57,6 +57,7 @@
 #include "resourcefiles/resourcefile.h"
 #include "md5.h"
 #include "doomstat.h"
+#include "vm.h"
 
 // MACROS ------------------------------------------------------------------
 
@@ -184,12 +185,13 @@ void FWadCollection::InitMultipleFiles (TArray<FString> &filenames)
 	}
 	RenameNerve();
 	RenameSprites();
+	FixMacHexen();
 
 	// [RH] Set up hash table
-	FirstLumpIndex = new DWORD[NumLumps];
-	NextLumpIndex = new DWORD[NumLumps];
-	FirstLumpIndex_FullName = new DWORD[NumLumps];
-	NextLumpIndex_FullName = new DWORD[NumLumps];
+	FirstLumpIndex = new uint32_t[NumLumps];
+	NextLumpIndex = new uint32_t[NumLumps];
+	FirstLumpIndex_FullName = new uint32_t[NumLumps];
+	NextLumpIndex_FullName = new uint32_t[NumLumps];
 	InitHashChains ();
 	LumpInfo.ShrinkToFit();
 	Files.ShrinkToFit();
@@ -255,7 +257,7 @@ void FWadCollection::AddFile (const char *filename, FileReader *wadinfo)
 		}
 	}
 
-	Printf (" adding %s", filename);
+	if (!batchrun) Printf (" adding %s", filename);
 	startlump = NumLumps;
 
 	FResourceFile *resfile;
@@ -267,10 +269,10 @@ void FWadCollection::AddFile (const char *filename, FileReader *wadinfo)
 
 	if (resfile != NULL)
 	{
-		DWORD lumpstart = LumpInfo.Size();
+		uint32_t lumpstart = LumpInfo.Size();
 
 		resfile->SetFirstLump(lumpstart);
-		for (DWORD i=0; i < resfile->LumpCount(); i++)
+		for (uint32_t i=0; i < resfile->LumpCount(); i++)
 		{
 			FResourceLump *lump = resfile->GetLump(i);
 			FWadCollection::LumpRecord *lump_p = &LumpInfo[LumpInfo.Reserve(1)];
@@ -279,13 +281,13 @@ void FWadCollection::AddFile (const char *filename, FileReader *wadinfo)
 			lump_p->wadnum = Files.Size();
 		}
 
-		if (Files.Size() == IWAD_FILENUM && gameinfo.gametype == GAME_Strife && gameinfo.flags & GI_SHAREWARE)
+		if (static_cast<int>(Files.Size()) == GetIwadNum() && gameinfo.gametype == GAME_Strife && gameinfo.flags & GI_SHAREWARE)
 		{
 			resfile->FindStrifeTeaserVoices();
 		}
 		Files.Push(resfile);
 
-		for (DWORD i=0; i < resfile->LumpCount(); i++)
+		for (uint32_t i=0; i < resfile->LumpCount(); i++)
 		{
 			FResourceLump *lump = resfile->GetLump(i);
 			if (lump->Flags & LUMPF_EMBEDDED)
@@ -299,7 +301,7 @@ void FWadCollection::AddFile (const char *filename, FileReader *wadinfo)
 
 		if (hashfile)
 		{
-			BYTE cksum[16];
+			uint8_t cksum[16];
 			char cksumout[33];
 			memset(cksumout, 0, sizeof(cksumout));
 
@@ -323,7 +325,7 @@ void FWadCollection::AddFile (const char *filename, FileReader *wadinfo)
 			else
 				fprintf(hashfile, "file: %s, Directory structure\n", filename);
 
-			for (DWORD i = 0; i < resfile->LumpCount(); i++)
+			for (uint32_t i = 0; i < resfile->LumpCount(); i++)
 			{
 				FResourceLump *lump = resfile->GetLump(i);
 
@@ -428,9 +430,9 @@ int FWadCollection::CheckNumForName (const char *name, int space)
 	union
 	{
 		char uname[8];
-		QWORD qname;
+		uint64_t qname;
 	};
-	DWORD i;
+	uint32_t i;
 
 	if (name == NULL)
 	{
@@ -474,9 +476,9 @@ int FWadCollection::CheckNumForName (const char *name, int space, int wadnum, bo
 	union
 	{
 		char uname[8];
-		QWORD qname;
+		uint64_t qname;
 	};
-	DWORD i;
+	uint32_t i;
 
 	if (wadnum < 0)
 	{
@@ -500,6 +502,15 @@ int FWadCollection::CheckNumForName (const char *name, int space, int wadnum, bo
 	return i != NULL_INDEX ? i : -1;
 }
 
+DEFINE_ACTION_FUNCTION(_Wads, CheckNumForName)
+{
+	PARAM_PROLOGUE;
+	PARAM_STRING(name);
+	PARAM_INT(ns);
+	PARAM_INT_DEF(wadnum);
+	PARAM_BOOL_DEF(exact);
+	ACTION_RETURN_INT(Wads.CheckNumForName(name, ns, wadnum, exact));
+}
 //==========================================================================
 //
 // W_GetNumForName
@@ -533,7 +544,7 @@ int FWadCollection::GetNumForName (const char *name, int space)
 
 int FWadCollection::CheckNumForFullName (const char *name, bool trynormal, int namespc)
 {
-	DWORD i;
+	uint32_t i;
 
 	if (name == NULL)
 	{
@@ -556,9 +567,16 @@ int FWadCollection::CheckNumForFullName (const char *name, bool trynormal, int n
 	return -1;
 }
 
+DEFINE_ACTION_FUNCTION(_Wads, CheckNumForFullName)
+{
+	PARAM_PROLOGUE;
+	PARAM_STRING(name);
+	ACTION_RETURN_INT(Wads.CheckNumForFullName(name));
+}
+
 int FWadCollection::CheckNumForFullName (const char *name, int wadnum)
 {
-	DWORD i;
+	uint32_t i;
 
 	if (wadnum < 0)
 	{
@@ -692,10 +710,10 @@ int FWadCollection::GetLumpFlags (int lump)
 //
 //==========================================================================
 
-DWORD FWadCollection::LumpNameHash (const char *s)
+uint32_t FWadCollection::LumpNameHash (const char *s)
 {
-	const DWORD *table = GetCRCTable ();;
-	DWORD hash = 0xffffffff;
+	const uint32_t *table = GetCRCTable ();;
+	uint32_t hash = 0xffffffff;
 	int i;
 
 	for (i = 8; i > 0 && *s; --i, ++s)
@@ -759,11 +777,11 @@ void FWadCollection::RenameSprites ()
 	bool renameAll;
 	bool MNTRZfound = false;
 
-	static const DWORD HereticRenames[] =
+	static const uint32_t HereticRenames[] =
 	{ MAKE_ID('H','E','A','D'), MAKE_ID('L','I','C','H'),		// Ironlich
 	};
 
-	static const DWORD HexenRenames[] =
+	static const uint32_t HexenRenames[] =
 	{ MAKE_ID('B','A','R','L'), MAKE_ID('Z','B','A','R'),		// ZBarrel
 	  MAKE_ID('A','R','M','1'), MAKE_ID('A','R','_','1'),		// MeshArmor
 	  MAKE_ID('A','R','M','2'), MAKE_ID('A','R','_','2'),		// FalconShield
@@ -780,7 +798,7 @@ void FWadCollection::RenameSprites ()
 	  MAKE_ID('I','N','V','U'), MAKE_ID('D','E','F','N'),		// Icon of the Defender
 	};
 
-	static const DWORD StrifeRenames[] =
+	static const uint32_t StrifeRenames[] =
 	{ MAKE_ID('M','I','S','L'), MAKE_ID('S','M','I','S'),		// lots of places
 	  MAKE_ID('A','R','M','1'), MAKE_ID('A','R','M','3'),		// MetalArmor
 	  MAKE_ID('A','R','M','2'), MAKE_ID('A','R','M','4'),		// LeatherArmor
@@ -800,7 +818,7 @@ void FWadCollection::RenameSprites ()
 	  MAKE_ID('S','P','I','D'), MAKE_ID('S','T','L','K'),		// Stalker
 	};
 
-	const DWORD *renames;
+	const uint32_t *renames;
 	int numrenames;
 
 	switch (gameinfo.gametype)
@@ -827,7 +845,7 @@ void FWadCollection::RenameSprites ()
 	}
 
 
-	for (DWORD i=0; i< LumpInfo.Size(); i++)
+	for (uint32_t i=0; i< LumpInfo.Size(); i++)
 	{
 		// check for full Minotaur animations. If this is not found
 		// some frames need to be renamed.
@@ -843,12 +861,12 @@ void FWadCollection::RenameSprites ()
 
 	renameAll = !!Args->CheckParm ("-oldsprites") || nospriterename;
 	
-	for (DWORD i = 0; i < LumpInfo.Size(); i++)
+	for (uint32_t i = 0; i < LumpInfo.Size(); i++)
 	{
 		if (LumpInfo[i].lump->Namespace == ns_sprites)
 		{
 			// Only sprites in the IWAD normally get renamed
-			if (renameAll || LumpInfo[i].wadnum == IWAD_FILENUM)
+			if (renameAll || LumpInfo[i].wadnum == GetIwadNum())
 			{
 				for (int j = 0; j < numrenames; ++j)
 				{
@@ -906,11 +924,11 @@ void FWadCollection::RenameNerve ()
 		return;
 
 	bool found = false;
-	BYTE cksum[16];
-	static const BYTE nerve[16] = { 0x96, 0x7d, 0x5a, 0xe2, 0x3d, 0xaf, 0x45, 0x19,
+	uint8_t cksum[16];
+	static const uint8_t nerve[16] = { 0x96, 0x7d, 0x5a, 0xe2, 0x3d, 0xaf, 0x45, 0x19,
 		0x62, 0x12, 0xae, 0x1b, 0x60, 0x5d, 0xa3, 0xb0 };
 	size_t nervesize = 3819855; // NERVE.WAD's file size
-	int w = IWAD_FILENUM;
+	int w = GetIwadNum();
 	while (++w < GetNumWads())
 	{
 		FileReader *fr = GetFileReader(w);
@@ -958,6 +976,86 @@ void FWadCollection::RenameNerve ()
 
 //==========================================================================
 //
+// FixMacHexen
+//
+// Discard all extra lumps in Mac version of Hexen IWAD (demo or full)
+// to avoid any issues caused by names of these lumps, including:
+//  * Wrong height of small font
+//  * Broken life bar of mage class
+//
+//==========================================================================
+
+void FWadCollection::FixMacHexen()
+{
+	if (GAME_Hexen != gameinfo.gametype)
+	{
+		return;
+	}
+
+	FileReader* const reader = GetFileReader(GetIwadNum());
+	const long iwadSize = reader->GetLength();
+
+	static const long DEMO_SIZE = 13596228;
+	static const long BETA_SIZE = 13749984;
+	static const long FULL_SIZE = 21078584;
+
+	if (   DEMO_SIZE != iwadSize
+		&& BETA_SIZE != iwadSize
+		&& FULL_SIZE != iwadSize)
+	{
+		return;
+	}
+
+	reader->Seek(0, SEEK_SET);
+
+	uint8_t checksum[16];
+	MD5Context md5;
+	md5.Update(reader, iwadSize);
+	md5.Final(checksum);
+
+	static const uint8_t HEXEN_DEMO_MD5[16] =
+	{
+		0x92, 0x5f, 0x9f, 0x50, 0x00, 0xe1, 0x7d, 0xc8,
+		0x4b, 0x0a, 0x6a, 0x3b, 0xed, 0x3a, 0x6f, 0x31
+	};
+
+	static const uint8_t HEXEN_BETA_MD5[16] =
+	{
+		0x2a, 0xf1, 0xb2, 0x7c, 0xd1, 0x1f, 0xb1, 0x59,
+		0xe6, 0x08, 0x47, 0x2a, 0x1b, 0x53, 0xe4, 0x0e
+	};
+
+	static const uint8_t HEXEN_FULL_MD5[16] =
+	{
+		0xb6, 0x81, 0x40, 0xa7, 0x96, 0xf6, 0xfd, 0x7f,
+		0x3a, 0x5d, 0x32, 0x26, 0xa3, 0x2b, 0x93, 0xbe
+	};
+
+	const bool isBeta = 0 == memcmp(HEXEN_BETA_MD5, checksum, sizeof checksum);
+
+	if (   !isBeta
+		&& 0 != memcmp(HEXEN_DEMO_MD5, checksum, sizeof checksum)
+		&& 0 != memcmp(HEXEN_FULL_MD5, checksum, sizeof checksum))
+	{
+		return;
+	}
+
+	static const int EXTRA_LUMPS = 299;
+
+	// Hexen Beta is very similar to Demo but it has MAP41: Maze at the end of the WAD
+	// So keep this map if it's present but discard all extra lumps
+
+	const int lastLump = GetLastLump(GetIwadNum()) - (isBeta ? 12 : 0);
+	assert(GetFirstLump(GetIwadNum()) + 299 < lastLump);
+
+	for (int i = lastLump - EXTRA_LUMPS + 1; i <= lastLump; ++i)
+	{
+		LumpInfo[i].lump->Name[0] = '\0';
+	}
+}
+
+//==========================================================================
+//
 // W_FindLump
 //
 // Find a named lump. Specifically allows duplicates for merging of e.g.
@@ -970,7 +1068,7 @@ int FWadCollection::FindLump (const char *name, int *lastlump, bool anyns)
 	union
 	{
 		char name8[8];
-		QWORD qname;
+		uint64_t qname;
 	};
 	LumpRecord *lump_p;
 
@@ -993,6 +1091,16 @@ int FWadCollection::FindLump (const char *name, int *lastlump, bool anyns)
 
 	*lastlump = NumLumps;
 	return -1;
+}
+
+DEFINE_ACTION_FUNCTION(_Wads, FindLump)
+{
+	PARAM_PROLOGUE;
+	PARAM_STRING(name);
+	PARAM_INT_DEF(startlump);
+	PARAM_INT_DEF(ns);
+	const bool isLumpValid = startlump >= 0 && startlump < Wads.GetNumLumps();
+	ACTION_RETURN_INT(isLumpValid ? Wads.FindLump(name, &startlump, 0 != ns) : -1);
 }
 
 //==========================================================================
@@ -1189,6 +1297,14 @@ FMemLump FWadCollection::ReadLump (int lump)
 	return FMemLump(FString(ELumpNum(lump)));
 }
 
+DEFINE_ACTION_FUNCTION(_Wads, ReadLump)
+{
+	PARAM_PROLOGUE;
+	PARAM_INT(lump);
+	const bool isLumpValid = lump >= 0 && lump < Wads.GetNumLumps();
+	ACTION_RETURN_STRING(isLumpValid ? Wads.ReadLump(lump).GetString() : FString());
+}
+
 //==========================================================================
 //
 // OpenLumpNum
@@ -1250,7 +1366,7 @@ FWadLump *FWadCollection::ReopenLumpNumNewFile (int lump)
 
 FileReader *FWadCollection::GetFileReader(int wadnum)
 {
-	if ((DWORD)wadnum >= Files.Size())
+	if ((uint32_t)wadnum >= Files.Size())
 	{
 		return NULL;
 	}
@@ -1269,7 +1385,7 @@ const char *FWadCollection::GetWadName (int wadnum) const
 {
 	const char *name, *slash;
 
-	if ((DWORD)wadnum >= Files.Size())
+	if ((uint32_t)wadnum >= Files.Size())
 	{
 		return NULL;
 	}
@@ -1286,7 +1402,7 @@ const char *FWadCollection::GetWadName (int wadnum) const
 
 int FWadCollection::GetFirstLump (int wadnum) const
 {
-	if ((DWORD)wadnum >= Files.Size())
+	if ((uint32_t)wadnum >= Files.Size())
 	{
 		return 0;
 	}
@@ -1301,7 +1417,7 @@ int FWadCollection::GetFirstLump (int wadnum) const
 
 int FWadCollection::GetLastLump (int wadnum) const
 {
-	if ((DWORD)wadnum >= Files.Size())
+	if ((uint32_t)wadnum >= Files.Size())
 	{
 		return 0;
 	}
