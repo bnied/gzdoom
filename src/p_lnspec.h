@@ -46,13 +46,12 @@ typedef enum {
 struct FLineSpecial
 {
 	const char *name;
-	BYTE number;
-	SBYTE min_args;
-	SBYTE max_args;
-	BYTE map_args;
+	int number;
+	int8_t min_args;
+	int8_t max_args;
+	uint8_t map_args;
 };
 
-extern const FLineSpecial *LineSpecialsInfo[256];
 
 typedef enum {
 	Init_Gravity = 0,
@@ -60,6 +59,8 @@ typedef enum {
 	Init_Damage = 2,
 	Init_SectorLink = 3,
 	NUM_STATIC_INITS,
+	Init_EDSector = 253,
+	Init_EDLine = 254,
 	Init_TransferSky = 255
 } staticinit_t;
 
@@ -195,15 +196,15 @@ typedef int (*lnSpecFunc)(struct line_t	*line,
 						  int			arg4,
 						  int			arg5);
 
-extern lnSpecFunc LineSpecials[256];
-
-extern BYTE NamedACSToNormalACS[7];
+extern uint8_t NamedACSToNormalACS[7];
 static inline bool P_IsACSSpecial(int specnum)
 {
 	return (specnum >= ACS_Execute && specnum <= ACS_LockedExecuteDoor) ||
 			specnum == ACS_ExecuteAlways;
 }
 
+FLineSpecial *P_GetLineSpecialInfo(int num);
+int P_GetMaxLineSpecial();
 int P_FindLineSpecial (const char *string, int *min_args=NULL, int *max_args=NULL);
 bool P_ActivateThingSpecial(AActor * thing, AActor * trigger, bool death=false);
 int P_ExecuteSpecial(int			num,

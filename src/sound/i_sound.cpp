@@ -32,19 +32,6 @@
 **
 */
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <mmsystem.h>
-#include "resource.h"
-extern HWND Window;
-extern HINSTANCE g_hInst;
-#define USE_WINDOWS_DWORD
-#else
-#define FALSE 0
-#define TRUE 1
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -52,8 +39,6 @@ extern HINSTANCE g_hInst;
 #include "doomtype.h"
 #include <math.h>
 
-#include "except.h"
-#include "fmodsound.h"
 #include "oalsound.h"
 
 #include "mpg123_decoder.h"
@@ -80,11 +65,9 @@ extern HINSTANCE g_hInst;
 EXTERN_CVAR (Float, snd_sfxvolume)
 CVAR (Int, snd_samplerate, 0, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 CVAR (Int, snd_buffersize, 0, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-CVAR (String, snd_output, "default", CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
+CVAR (Int, snd_hrtf, -1, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
-#ifndef NO_FMOD
-#define DEF_BACKEND "fmod"
-#elif !defined(NO_OPENAL)
+#if !defined(NO_OPENAL)
 #define DEF_BACKEND "openal"
 #else
 #define DEF_BACKEND "null"
@@ -125,6 +108,8 @@ CUSTOM_CVAR (Float, snd_sfxvolume, 1.f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOIN
 	}
 }
 
+class MIDIStreamer;
+
 class NullSoundRenderer : public SoundRenderer
 {
 public:
@@ -135,15 +120,15 @@ public:
 	void SetMusicVolume (float volume)
 	{
 	}
-	SoundHandle LoadSound(BYTE *sfxdata, int length)
+	std::pair<SoundHandle,bool> LoadSound(uint8_t *sfxdata, int length, bool monoize, FSoundLoadBuffer *pBuffer)
 	{
 		SoundHandle retval = { NULL };
-		return retval;
+		return std::make_pair(retval, true);
 	}
-	SoundHandle LoadSoundRaw(BYTE *sfxdata, int length, int frequency, int channels, int bits, int loopstart, int loopend)
+	std::pair<SoundHandle,bool> LoadSoundRaw(uint8_t *sfxdata, int length, int frequency, int channels, int bits, int loopstart, int loopend, bool monoize)
 	{
 		SoundHandle retval = { NULL };
-		return retval;
+        return std::make_pair(retval, true);
 	}
 	void UnloadSound (SoundHandle sfx)
 	{
@@ -259,34 +244,25 @@ void I_InitSound ()
 	nosfx = !!Args->CheckParm ("-nosfx");
 
 	GSnd = NULL;
-	if (nosound)
+	if (nosound || batchrun)
 	{
 		GSnd = new NullSoundRenderer;
 		I_InitMusic ();
 		return;
 	}
 
-	// This has been extended to allow falling back from FMod to OpenAL and vice versa if the currently active sound system cannot be found.
+#ifndef NO_OPENAL
+	// Simplify transition to OpenAL backend
+	if (stricmp(snd_backend, "fmod") == 0)
+	{
+		Printf (TEXTCOLOR_ORANGE "FMOD Ex sound system was removed, switching to OpenAL\n");
+		snd_backend = "openal";
+	}
+#endif // NO_OPENAL
+
 	if (stricmp(snd_backend, "null") == 0)
 	{
 		GSnd = new NullSoundRenderer;
-	}
-	else if(stricmp(snd_backend, "fmod") == 0)
-	{
-		#ifndef NO_FMOD
-			if (IsFModExPresent())
-			{
-				GSnd = new FMODSoundRenderer;
-			}
-		#endif
-		#ifndef NO_OPENAL
-			if ((!GSnd || !GSnd->IsValid()) && IsOpenALPresent())
-			{
-				Printf (TEXTCOLOR_RED"FMod Ex Sound init failed. Trying OpenAL.\n");
-				GSnd = new OpenALSoundRenderer;
-				snd_backend = "openal";
-			}
-		#endif
 	}
 	else if(stricmp(snd_backend, "openal") == 0)
 	{
@@ -294,14 +270,6 @@ void I_InitSound ()
 			if (IsOpenALPresent())
 			{
 				GSnd = new OpenALSoundRenderer;
-			}
-		#endif
-		#ifndef NO_FMOD
-			if ((!GSnd || !GSnd->IsValid()) && IsFModExPresent())
-			{
-				Printf (TEXTCOLOR_RED"OpenAL Sound init failed. Trying FMod Ex.\n");
-				GSnd = new FMODSoundRenderer;
-				snd_backend = "fmod";
 			}
 		#endif
 	}
@@ -415,7 +383,7 @@ short *SoundRenderer::DecodeSample(int outlen, const void *coded, int sizebytes,
     decoder->getInfo(&srate, &chans, &type);
     if(chans != ChannelConfig_Mono || type != SampleType_Int16)
     {
-        DPrintf("Sample is not 16-bit mono\n");
+        DPrintf(DMSG_WARNING, "Sample is not 16-bit mono\n");
         delete decoder;
         return samples;
     }
@@ -454,9 +422,9 @@ FString SoundStream::GetStats()
 //
 //==========================================================================
 
-SoundHandle SoundRenderer::LoadSoundVoc(BYTE *sfxdata, int length)
+std::pair<SoundHandle,bool> SoundRenderer::LoadSoundVoc(uint8_t *sfxdata, int length, bool monoize)
 {
-	BYTE * data = NULL;
+	uint8_t * data = NULL;
 	int len, frequency, channels, bits, loopstart, loopend;
 	len = frequency = channels = bits = 0;
 	loopstart = loopend = -1;
@@ -551,7 +519,7 @@ SoundHandle SoundRenderer::LoadSoundVoc(BYTE *sfxdata, int length)
 				break;
 			default: // Unknown block type
 				okay = false;
-				DPrintf ("Unknown VOC block type %i\n", blocktype);
+				DPrintf (DMSG_ERROR, "Unknown VOC block type %i\n", blocktype);
 				break;
 			}
 			// Move to next block
@@ -561,7 +529,7 @@ SoundHandle SoundRenderer::LoadSoundVoc(BYTE *sfxdata, int length)
 		// Second pass to write the data
 		if (okay)
 		{
-			data = new BYTE[len];
+			data = new uint8_t[len];
 			i = 26;
 			int j = 0;
 			while (i < length)
@@ -598,14 +566,15 @@ SoundHandle SoundRenderer::LoadSoundVoc(BYTE *sfxdata, int length)
 		}
 
 	} while (false);
-	SoundHandle retval = LoadSoundRaw(data, len, frequency, channels, bits, loopstart, loopend);
+	std::pair<SoundHandle,bool> retval = LoadSoundRaw(data, len, frequency, channels, bits, loopstart, loopend, monoize);
 	if (data) delete[] data;
 	return retval;
 }
 
-SoundStream *SoundRenderer::OpenStream(const char *url, int flags)
+std::pair<SoundHandle, bool> SoundRenderer::LoadSoundBuffered(FSoundLoadBuffer *buffer, bool monoize)
 {
-    return 0;
+	SoundHandle retval = { NULL };
+	return std::make_pair(retval, true);
 }
 
 SoundDecoder *SoundRenderer::CreateDecoder(FileReader *reader)
@@ -613,8 +582,8 @@ SoundDecoder *SoundRenderer::CreateDecoder(FileReader *reader)
     SoundDecoder *decoder = NULL;
     int pos = reader->Tell();
 
-#ifdef HAVE_MPG123
-		decoder = new MPG123Decoder;
+#ifdef HAVE_SNDFILE
+		decoder = new SndFileDecoder;
 		if (decoder->open(reader))
 			return decoder;
 		reader->Seek(pos, SEEK_SET);
@@ -622,8 +591,8 @@ SoundDecoder *SoundRenderer::CreateDecoder(FileReader *reader)
 		delete decoder;
 		decoder = NULL;
 #endif
-#ifdef HAVE_SNDFILE
-		decoder = new SndFileDecoder;
+#ifdef HAVE_MPG123
+		decoder = new MPG123Decoder;
 		if (decoder->open(reader))
 			return decoder;
 		reader->Seek(pos, SEEK_SET);
@@ -636,14 +605,14 @@ SoundDecoder *SoundRenderer::CreateDecoder(FileReader *reader)
 
 
 // Default readAll implementation, for decoders that can't do anything better
-TArray<char> SoundDecoder::readAll()
+TArray<uint8_t> SoundDecoder::readAll()
 {
-    TArray<char> output;
+    TArray<uint8_t> output;
     unsigned total = 0;
     unsigned got;
 
     output.Resize(total+32768);
-    while((got=(unsigned)read(&output[total], output.Size()-total)) > 0)
+    while((got=(unsigned)read((char*)&output[total], output.Size()-total)) > 0)
     {
         total += got;
         output.Resize(total*2);

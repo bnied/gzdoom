@@ -50,10 +50,6 @@
 #include <wordexp.h>
 #include <unistd.h>
 
-#if MAC_OS_X_VERSION_MAX_ALLOWED < 1050
-// Missing type definition for 10.4 and earlier
-typedef unsigned int NSUInteger;
-#endif // prior to 10.5
 
 CVAR(String, osx_additional_parameters, "", CVAR_ARCHIVE | CVAR_NOSET | CVAR_GLOBALCONFIG);
 
@@ -68,10 +64,7 @@ enum
 static const char* const tableHeaders[NUM_COLUMNS] = { "IWAD", "Game" };
 
 // Class to convert the IWAD data into a form that Cocoa can use.
-@interface IWADTableData : NSObject
-#if MAC_OS_X_VERSION_MAX_ALLOWED >= 1060
-	<NSTableViewDataSource>
-#endif
+@interface IWADTableData : NSObject<NSTableViewDataSource>
 {
 	NSMutableArray *data;
 }
@@ -395,11 +388,11 @@ static NSString* GetArchitectureString()
 #endif
 }
 
-static void RestartWithParameters(const char* iwadPath, NSString* parameters)
+static void RestartWithParameters(const WadStuff& wad, NSString* parameters)
 {
 	assert(nil != parameters);
 
-	defaultiwad = ExtractFileBase(iwadPath);
+	defaultiwad = wad.Name;
 
 	GameConfig->DoGameSetup("Doom");
 	M_SaveDefaults(NULL);
@@ -427,7 +420,7 @@ static void RestartWithParameters(const char* iwadPath, NSString* parameters)
 
 		[arguments addObject:@"-wad_picker_restart"];
 		[arguments addObject:@"-iwad"];
-		[arguments addObject:[NSString stringWithUTF8String:iwadPath]];
+		[arguments addObject:[NSString stringWithUTF8String:wad.Path]];
 
 		for (int i = 1, count = Args->NumArgs(); i < count; ++i)
 		{
@@ -462,19 +455,13 @@ static void RestartWithParameters(const char* iwadPath, NSString* parameters)
 	[pool release];
 }
 
-void I_SetMainWindowVisible(bool visible);
-
 // Simple wrapper so we can call this from outside.
 int I_PickIWad_Cocoa (WadStuff *wads, int numwads, bool showwin, int defaultiwad)
 {
 	NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
 
-	I_SetMainWindowVisible(false);
-
 	IWADPicker *picker = [IWADPicker alloc];
 	int ret = [picker pickIWad:wads num:numwads showWindow:showwin defaultWad:defaultiwad];
-
-	I_SetMainWindowVisible(true);
 
 	NSString* parametersToAppend = [picker commandLineParameters];
 	osx_additional_parameters = [parametersToAppend UTF8String];
@@ -483,7 +470,7 @@ int I_PickIWad_Cocoa (WadStuff *wads, int numwads, bool showwin, int defaultiwad
 	{
 		if (0 != [parametersToAppend length])
 		{
-			RestartWithParameters(wads[ret].Path, parametersToAppend);
+			RestartWithParameters(wads[ret], parametersToAppend);
 		}
 	}
 

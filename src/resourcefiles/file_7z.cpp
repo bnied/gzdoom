@@ -32,10 +32,8 @@
 **
 **
 */
-#ifdef _WIN32
-#define USE_WINDOWS_DWORD
-#endif
 
+// Note that 7z made the unwise decision to include windows.h :(
 #include "7z.h"
 #include "7zCrc.h"
 
@@ -252,25 +250,26 @@ bool F7ZFile::Open(bool quiet)
 		}
 		return false;
 	}
-	NumLumps = Archive->DB.db.NumFiles;
 
+	CSzArEx* const archPtr = &Archive->DB;
+
+	NumLumps = archPtr->NumFiles;
 	Lumps = new F7ZLump[NumLumps];
 
 	F7ZLump *lump_p = Lumps;
 	TArray<UInt16> nameUTF16;
 	TArray<char> nameASCII;
-	for (DWORD i = 0; i < NumLumps; ++i)
-	{
-		CSzFileItem *file = &Archive->DB.db.Files[i];
 
+	for (uint32_t i = 0; i < NumLumps; ++i)
+	{
 		// skip Directories
-		if (file->IsDir)
+		if (SzArEx_IsDir(archPtr, i))
 		{
 			skipped++;
 			continue;
 		}
 
-		const size_t nameLength = SzArEx_GetFileNameUtf16(&Archive->DB, i, NULL);
+		const size_t nameLength = SzArEx_GetFileNameUtf16(archPtr, i, NULL);
 
 		if (0 == nameLength)
 		{
@@ -280,7 +279,7 @@ bool F7ZFile::Open(bool quiet)
 
 		nameUTF16.Resize((unsigned)nameLength);
 		nameASCII.Resize((unsigned)nameLength);
-		SzArEx_GetFileNameUtf16(&Archive->DB, i, &nameUTF16[0]);
+		SzArEx_GetFileNameUtf16(archPtr, i, &nameUTF16[0]);
 		for (size_t c = 0; c < nameLength; ++c)
 		{
 			nameASCII[c] = static_cast<char>(nameUTF16[c]);
@@ -291,7 +290,7 @@ bool F7ZFile::Open(bool quiet)
 		name.ToLower();
 
 		lump_p->LumpNameSetup(name);
-		lump_p->LumpSize = int(file->Size);
+		lump_p->LumpSize = static_cast<int>(SzArEx_GetFileSize(archPtr, i));
 		lump_p->Owner = this;
 		lump_p->Flags = LUMPF_ZIPFILE;
 		lump_p->Position = i;
@@ -315,7 +314,7 @@ bool F7ZFile::Open(bool quiet)
 		}
 	}
 
-	if (!quiet) Printf(", %d lumps\n", NumLumps);
+	if (!quiet && !batchrun) Printf(", %d lumps\n", NumLumps);
 
 	PostProcessArchive(&Lumps[0], sizeof(F7ZLump));
 	return true;

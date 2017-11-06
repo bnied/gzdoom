@@ -34,6 +34,7 @@
 */
 
 #include "info.h"
+#include "actor.h"
 #include "p_lnspec.h"
 #include "m_fixed.h"
 #include "c_dispatch.h"
@@ -69,6 +70,7 @@ const char *SpecialMapthingNames[] = {
 	"$CopyCeilingPlane",
 	"$VertexFloorZ",
 	"$VertexCeilingZ",
+	"$EDThing",
 
 };
 //==========================================================================
@@ -81,11 +83,12 @@ struct MapinfoEdMapItem
 {
 	FName classname;	// DECORATE is read after MAPINFO so we do not have the actual classes available here yet.
 	short special;
-	bool argsdefined;
+	signed char argsdefined;
 	int args[5];
 	// These are for error reporting. We must store the file information because it's no longer available when these items get resolved.
 	FString filename;
 	int linenum;
+	bool noskillflags;
 };
 
 typedef TMap<int, MapinfoEdMapItem> IdMap;
@@ -99,7 +102,7 @@ static IdMap DoomEdFromMapinfo;
 
 FDoomEdMap DoomEdMap;
 
-static int STACK_ARGS sortnums (const void *a, const void *b)
+static int sortnums (const void *a, const void *b)
 {
 	return (*(const FDoomEdMap::Pair**)a)->Key - (*(const FDoomEdMap::Pair**)b)->Key;
 }
@@ -171,7 +174,7 @@ void FMapInfoParser::ParseDoomEdNums()
 			defined[ednum] = true;
 			if (sc.String[0] == '$')
 			{
-				// todo: add special stuff like playerstarts and sound sequence overrides here, too.
+				// add special stuff like playerstarts and sound sequence overrides here, too.
 				editem.classname = NAME_None;
 				editem.special = sc.MustMatchString(SpecialMapthingNames) + 1; // todo: assign proper constants
 			}
@@ -181,14 +184,20 @@ void FMapInfoParser::ParseDoomEdNums()
 				editem.special = -1;
 			}
 			memset(editem.args, 0, sizeof(editem.args));
-			editem.argsdefined = false;
+			editem.argsdefined = 0;
+			editem.noskillflags = false;
 
 			int minargs = 0;
 			int maxargs = 5;
 			FString specialname;
 			if (sc.CheckString(","))
 			{
-				editem.argsdefined = true; // mark args as used - if this is done we need to prevent assignment of map args in P_SpawnMapThing.
+				if (sc.CheckString("noskillflags"))
+				{
+					editem.noskillflags = true;
+					if (!sc.CheckString(",")) goto noargs;
+				}
+				editem.argsdefined = 5; // mark args as used - if this is done we need to prevent assignment of map args in P_SpawnMapThing.
 				if (editem.special < 0) editem.special = 0;
 				if (!sc.CheckNumber())
 				{
@@ -221,7 +230,14 @@ void FMapInfoParser::ParseDoomEdNums()
 					editem.args[i] = sc.Number;
 					i++;
 					if (!sc.CheckString(",")) break;
+					// special check for the ambient sounds which combine the arg being set here with the ones on the mapthing.
+					if (sc.CheckString("+"))
+					{
+						editem.argsdefined = i;
+						break;
+					}
 					sc.MustGetNumber();
+
 				}
 				if (specialname.IsNotEmpty() && (i < minargs || i > maxargs))
 				{
@@ -229,6 +245,7 @@ void FMapInfoParser::ParseDoomEdNums()
 					error++;
 				}
 			}
+		noargs:
 			DoomEdFromMapinfo.Insert(ednum, editem);
 		}
 		else
@@ -238,7 +255,7 @@ void FMapInfoParser::ParseDoomEdNums()
 	}
 	if (error > 0)
 	{
-		sc.ScriptError("%d errors encountered in DoomEdNum definition");
+		sc.ScriptError("%d errors encountered in DoomEdNum definition", error);
 	}
 }
 
@@ -251,10 +268,10 @@ void InitActorNumsFromMapinfo()
 
 	while (it.NextPair(pair))
 	{
-		const PClass *cls = NULL;
+		PClassActor *cls = NULL;
 		if (pair->Value.classname != NAME_None)
 		{
-			cls = PClass::FindClass(pair->Value.classname);
+			cls = PClass::FindActor(pair->Value.classname);
 			if (cls == NULL)
 			{
 				Printf(TEXTCOLOR_RED "Script error, \"%s\" line %d:\nUnknown actor class %s\n",
@@ -266,6 +283,7 @@ void InitActorNumsFromMapinfo()
 		ent.Type = cls;
 		ent.Special = pair->Value.special;
 		ent.ArgsDefined = pair->Value.argsdefined;
+		ent.NoSkillFlags = pair->Value.noskillflags;
 		memcpy(ent.Args, pair->Value.args, sizeof(ent.Args));
 		DoomEdMap.Insert(pair->Key, ent);
 	}

@@ -41,8 +41,7 @@
 #include "gl/renderer/gl_renderer.h"
 #include "gl/scene/gl_drawinfo.h"
 #include "gl/utility/gl_templates.h"
-
-class ASkyViewpoint;
+#include "gl/data/gl_data.h"
 
 struct GLHorizonInfo
 {
@@ -70,11 +69,15 @@ struct GLSkyInfo
 	{
 		return !!memcmp(this, &inf, sizeof(*this));
 	}
+	void init(int sky1, PalEntry fadecolor);
 };
 
 extern UniqueList<GLSkyInfo> UniqueSkies;
 extern UniqueList<GLHorizonInfo> UniqueHorizons;
 extern UniqueList<secplane_t> UniquePlaneMirrors;
+extern UniqueList<FGLLinePortal> UniqueLineToLines;
+struct GLEEHorizonPortal;
+class GLSceneDrawer;
 
 class GLPortal
 {
@@ -88,6 +91,7 @@ protected:
 	static int renderdepth;
 
 public:
+	static GLSceneDrawer *drawer;
 	static int PlaneMirrorMode;
 	static int inupperstack;
 	static int	instack[2];
@@ -96,21 +100,24 @@ public:
 private:
 	void DrawPortalStencil();
 
-	fixed_t savedviewx;
-	fixed_t savedviewy;
-	fixed_t savedviewz;
-	angle_t savedviewangle;
+	DVector3 savedviewpath[2];
+	DVector3 savedViewPos;
+	DVector3 savedViewActorPos;
+	DRotator savedAngles;
+	bool savedshowviewer;
 	AActor * savedviewactor;
 	area_t savedviewarea;
-	GLPortal *NextPortal;
-	TArray<BYTE> savedmapsection;
+	ActorRenderFlags savedvisibility;
+	GLPortal *PrevPortal;
+	GLPortal *PrevClipPortal;
+	TArray<uint8_t> savedmapsection;
 	TArray<unsigned int> mPrimIndices;
 
 protected:
 	TArray<GLWall> lines;
 	int level;
 
-	GLPortal() { portals.Push(this); }
+	GLPortal(bool local = false) { if (!local) portals.Push(this); }
 	virtual ~GLPortal() { }
 
 	bool Start(bool usestencil, bool doquery);
@@ -125,6 +132,8 @@ protected:
 	virtual const char *GetName() = 0;
 	void SaveMapSection();
 	void RestoreMapSection();
+	virtual void PushState() {}
+	virtual void PopState() {}
 
 public:
 
@@ -132,7 +141,7 @@ public:
 	{
 		PClip_InFront,
 		PClip_Inside,
-		PClip_Behind
+		PClip_Behind,
 	};
 
 	void RenderPortal(bool usestencil, bool doquery)
@@ -158,17 +167,75 @@ public:
 	}
 
 	virtual int ClipSeg(seg_t *seg) { return PClip_Inside; }
-	virtual int ClipPoint(fixed_t x, fixed_t y) { return PClip_Inside; }
+	virtual int ClipSubsector(subsector_t *sub) { return PClip_Inside; }
+	virtual int ClipPoint(const DVector2 &pos) { return PClip_Inside; }
+	virtual line_t *ClipLine() { return NULL; }
+	virtual void RenderAttached() {}
 
 	static void BeginScene();
 	static void StartFrame();
 	static bool RenderFirstSkyPortal(int recursion);
 	static void EndFrame();
 	static GLPortal * FindPortal(const void * src);
+
+	static void Initialize();
+	static void Shutdown();
+};
+
+struct GLLinePortal : public GLPortal
+{
+	// this must be the same as at the start of line_t, so that we can pass in this structure directly to P_ClipLineToPortal.
+	vertex_t	*v1, *v2;	// vertices, from v1 to v2
+	DVector2	delta;		// precalculated v2 - v1 for side checking
+
+	angle_t		angv1, angv2;	// for quick comparisons with a line or subsector
+
+	GLLinePortal(line_t *line)
+	{
+		v1 = line->v1;
+		v2 = line->v2;
+		CalcDelta();
+	}
+
+	GLLinePortal(FGLLinePortal *line)
+	{
+		if (line->lines[0]->mType != PORTT_LINKED || line->v1 == nullptr)
+		{
+			// For non-linked portals we must check the actual linedef.
+			line_t *lline = line->lines[0]->mDestination;
+			v1 = lline->v1;
+			v2 = lline->v2;
+		}
+		else
+		{
+			// For linked portals we can check the merged span.
+			v1 = line->v1;
+			v2 = line->v2;
+		}
+		CalcDelta();
+	}
+
+	void CalcDelta()
+	{
+		delta = v2->fPos() - v1->fPos();
+	}
+
+	line_t *line()
+	{
+		vertex_t **pv = &v1;
+		return reinterpret_cast<line_t*>(pv);
+	}
+
+	virtual int ClipSeg(seg_t *seg);
+	virtual int ClipSubsector(subsector_t *sub);
+	virtual int ClipPoint(const DVector2 &pos);
+	virtual bool NeedCap() { return false; }
+	virtual void PushState();
+	virtual void PopState();
 };
 
 
-struct GLMirrorPortal : public GLPortal
+struct GLMirrorPortal : public GLLinePortal
 {
 	// mirror portals always consist of single linedefs!
 	line_t * linedef;
@@ -181,32 +248,49 @@ protected:
 public:
 	
 	GLMirrorPortal(line_t * line)
+		: GLLinePortal(line)
 	{
 		linedef=line;
 	}
+};
 
-	virtual bool NeedCap() { return false; }
-	virtual int ClipSeg(seg_t *seg);
-	virtual int ClipPoint(fixed_t x, fixed_t y);
+
+struct GLLineToLinePortal : public GLLinePortal
+{
+	FGLLinePortal *glport;
+protected:
+	virtual void DrawContents();
+	virtual void * GetSource() const { return glport; }
+	virtual const char *GetName();
+	virtual line_t *ClipLine() { return line(); }
+	virtual void RenderAttached();
+
+public:
+	
+	GLLineToLinePortal(FGLLinePortal *ll)
+		: GLLinePortal(ll)
+	{
+		glport = ll;
+	}
 };
 
 
 struct GLSkyboxPortal : public GLPortal
 {
-	AActor * origin;
+	FSectorPortal * portal;
 
 protected:
 	virtual void DrawContents();
-	virtual void * GetSource() const { return origin; }
-	virtual bool IsSky() { return true; } // later!
+	virtual void * GetSource() const { return portal; }
+	virtual bool IsSky() { return true; }
 	virtual const char *GetName();
 
 public:
 
 	
-	GLSkyboxPortal(AActor * pt)
+	GLSkyboxPortal(FSectorPortal * pt)
 	{
-		origin=pt;
+		portal=pt;
 	}
 
 };
@@ -215,6 +299,7 @@ public:
 struct GLSkyPortal : public GLPortal
 {
 	GLSkyInfo * origin;
+	friend struct GLEEHorizonPortal;
 
 protected:
 	virtual void DrawContents();
@@ -226,7 +311,8 @@ protected:
 public:
 
 	
-	GLSkyPortal(GLSkyInfo *  pt)
+	GLSkyPortal(GLSkyInfo *  pt, bool local = false)
+		: GLPortal(local)
 	{
 		origin=pt;
 	}
@@ -266,6 +352,8 @@ protected:
 	virtual void DrawContents();
 	virtual void * GetSource() const { return origin; }
 	virtual const char *GetName();
+	virtual void PushState();
+	virtual void PopState();
 	secplane_t * origin;
 
 public:
@@ -281,6 +369,9 @@ public:
 struct GLHorizonPortal : public GLPortal
 {
 	GLHorizonInfo * origin;
+	unsigned int voffset;
+	unsigned int vcount;
+	friend struct GLEEHorizonPortal;
 
 protected:
 	virtual void DrawContents();
@@ -291,9 +382,25 @@ protected:
 
 public:
 	
-	GLHorizonPortal(GLHorizonInfo * pt)
+	GLHorizonPortal(GLHorizonInfo * pt, bool local = false);
+};
+
+struct GLEEHorizonPortal : public GLPortal
+{
+	FSectorPortal * portal;
+
+protected:
+	virtual void DrawContents();
+	virtual void * GetSource() const { return portal; }
+	virtual bool NeedDepthBuffer() { return false; }
+	virtual bool NeedCap() { return false; }
+	virtual const char *GetName();
+
+public:
+	
+	GLEEHorizonPortal(FSectorPortal *pt)
 	{
-		origin=pt;
+		portal=pt;
 	}
 
 };

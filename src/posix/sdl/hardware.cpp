@@ -49,10 +49,11 @@
 #include "m_argv.h"
 #include "sdlglvideo.h"
 #include "r_renderer.h"
-#include "r_swrenderer.h"
+#include "swrenderer/r_swrenderer.h"
 
 EXTERN_CVAR (Bool, ticker)
 EXTERN_CVAR (Bool, fullscreen)
+EXTERN_CVAR (Bool, swtruecolor)
 EXTERN_CVAR (Float, vid_winscale)
 
 IVideo *Video;
@@ -94,7 +95,6 @@ void I_ShutdownGraphics ()
 	{
 		DFrameBuffer *s = screen;
 		screen = NULL;
-		s->ObjectFlags |= OF_YesReallyDelete;
 		delete s;
 	}
 	if (Video)
@@ -119,8 +119,7 @@ void I_InitGraphics ()
 	ticker.SetGenericRepDefault (val, CVAR_Bool);
 	
 	//currentrenderer = vid_renderer;
-	if (currentrenderer==1) Video = new SDLGLVideo(0);
-	else Video = new SDLVideo (0);
+	Video = new SDLGLVideo(0);
 	
 	if (Video == NULL)
 		I_FatalError ("Failed to initialize display");
@@ -166,7 +165,7 @@ DFrameBuffer *I_SetMode (int &width, int &height, DFrameBuffer *old)
 		fs = fullscreen;
 		break;
 	}
-	DFrameBuffer *res = Video->CreateFrameBuffer (width, height, fs, old);
+	DFrameBuffer *res = Video->CreateFrameBuffer (width, height, swtruecolor, fs, old);
 
 	/* Right now, CreateFrameBuffer cannot return NULL
 	if (res == NULL)
@@ -195,7 +194,7 @@ void I_ClosestResolution (int *width, int *height, int bits)
 	int twidth, theight;
 	int cwidth = 0, cheight = 0;
 	int iteration;
-	DWORD closest = 4294967295u;
+	uint32_t closest = 4294967295u;
 
 	for (iteration = 0; iteration < 2; iteration++)
 	{
@@ -208,7 +207,7 @@ void I_ClosestResolution (int *width, int *height, int bits)
 			if (iteration == 0 && (twidth < *width || theight < *height))
 				continue;
 
-			DWORD dist = (twidth - *width) * (twidth - *width)
+			uint32_t dist = (twidth - *width) * (twidth - *width)
 				+ (theight - *height) * (theight - *height);
 
 			if (dist < closest)
@@ -242,7 +241,7 @@ void I_ClosestResolution (int *width, int *height, int bits)
 EXTERN_CVAR(Int, vid_maxfps);
 EXTERN_CVAR(Bool, cl_capfps);
 
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__OpenBSD__)
 Semaphore FPSLimitSemaphore;
 
 static void FPSLimitNotify(sigval val)
@@ -280,18 +279,18 @@ void I_SetFPSLimit(int limit)
 	}
 	if (limit == 0)
 	{ // no limit
-		DPrintf("FPS timer disabled\n");
+		DPrintf(DMSG_NOTIFY, "FPS timer disabled\n");
 	}
 	else
 	{
 		FPSLimitTimerEnabled = true;
 		if(timer_create(CLOCK_REALTIME, &FPSLimitEvent, &FPSLimitTimer) == -1)
-			Printf("Failed to create FPS limitter event\n");
+			Printf(DMSG_WARNING, "Failed to create FPS limitter event\n");
 		itimerspec period = { {0, 0}, {0, 0} };
 		period.it_value.tv_nsec = period.it_interval.tv_nsec = 1000000000 / limit;
 		if(timer_settime(FPSLimitTimer, 0, &period, NULL) == -1)
-			Printf("Failed to set FPS limitter timer\n");
-		DPrintf("FPS timer set to %u ms\n", (unsigned int) period.it_interval.tv_nsec / 1000000);
+			Printf(DMSG_WARNING, "Failed to set FPS limitter timer\n");
+		DPrintf(DMSG_NOTIFY, "FPS timer set to %u ms\n", (unsigned int) period.it_interval.tv_nsec / 1000000);
 	}
 }
 #else
@@ -320,10 +319,23 @@ CUSTOM_CVAR (Int, vid_maxfps, 200, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
 extern int NewWidth, NewHeight, NewBits, DisplayBits;
 
-CUSTOM_CVAR (Bool, fullscreen, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
+CUSTOM_CVAR(Bool, swtruecolor, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOINITCALL)
 {
-	NewWidth = screen->GetWidth();
-	NewHeight = screen->GetHeight();
+	// Strictly speaking this doesn't require a mode switch, but it is the easiest
+	// way to force a CreateFramebuffer call without a lot of refactoring.
+	if (currentrenderer == 0)
+	{
+		NewWidth = screen->VideoWidth;
+		NewHeight = screen->VideoHeight;
+		NewBits = DisplayBits;
+		setmodeneeded = true;
+	}
+}
+
+CUSTOM_CVAR (Bool, fullscreen, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG|CVAR_NOINITCALL)
+{
+	NewWidth = screen->VideoWidth;
+	NewHeight = screen->VideoHeight;
 	NewBits = DisplayBits;
 	setmodeneeded = true;
 }
@@ -337,8 +349,8 @@ CUSTOM_CVAR (Float, vid_winscale, 1.f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 	else if (Video)
 	{
 		Video->SetWindowedScale (self);
-		NewWidth = screen->GetWidth();
-		NewHeight = screen->GetHeight();
+		NewWidth = screen->VideoWidth;
+		NewHeight = screen->VideoHeight;
 		NewBits = DisplayBits;
 		setmodeneeded = true;
 	}
@@ -346,7 +358,7 @@ CUSTOM_CVAR (Float, vid_winscale, 1.f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
 CCMD (vid_listmodes)
 {
-	static const char *ratios[5] = { "", " - 16:9", " - 16:10", "", " - 5:4" };
+	static const char *ratios[7] = { "", " - 16:9", " - 16:10", "", " - 5:4", "", " - 21:9" };
 	int width, height, bits;
 	bool letterbox;
 
@@ -363,7 +375,7 @@ CCMD (vid_listmodes)
 			int ratio = CheckRatio (width, height);
 			Printf (thisMode ? PRINT_BOLD : PRINT_HIGH,
 				"%s%4d x%5d x%3d%s%s\n",
-				thisMode || !(ratio & 3) ? "" : TEXTCOLOR_GOLD,
+				thisMode || !IsRatioWidescreen(ratio) ? "" : TEXTCOLOR_GOLD,
 				width, height, bits,
 				ratios[ratio],
 				thisMode || !letterbox ? "" : TEXTCOLOR_BROWN " LB"

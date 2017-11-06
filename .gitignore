@@ -4,6 +4,7 @@
 *.pdb
 *.ilk
 *.aps
+/fmodapi*/
 /Release
 /wadsrc_wad
 *.user
@@ -22,6 +23,9 @@
 /src/xlat/xlat_parser.c
 /src/xlat/xlat_parser.h
 /src/xlat/xlat_parser.out
+/src/zscript/zcc-parse.c
+/src/zscript/zcc-parse.h
+/src/zscript/zcc-parse.out
 /tools/*/debug
 /tools/*/release
 /tools/*/*.exe
@@ -40,3 +44,11 @@
 /zlib/x64/
 /build_vc2013_64bit
 /build_vc2015
+/build_vc2015-32
+/build_vc2015-64
+/build_vc2017-64
+/build
+/llvm
+/src/r_drawersasm.obj
+/src/r_drawersasm.o
+.vs

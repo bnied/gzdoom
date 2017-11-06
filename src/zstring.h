@@ -1,3 +1,4 @@
+#pragma once
 /*
 ** zstring.h
 **
@@ -31,8 +32,6 @@
 **
 */
 
-#ifndef ZSTRING_H
-#define ZSTRING_H
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -47,16 +46,10 @@
 #define PRINTFISH(x)
 #endif
 
-#ifdef __clang__
+#ifdef __GNUC__
 #define IGNORE_FORMAT_PRE \
 	_Pragma("GCC diagnostic push") \
-	_Pragma("GCC diagnostic ignored \"-Wformat-invalid-specifier\"") \
-	_Pragma("GCC diagnostic ignored \"-Wformat-extra-args\"")
-#define IGNORE_FORMAT_POST _Pragma("GCC diagnostic pop")
-#elif defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && (__GNUC_MINOR__ >= 6)))
-#define IGNORE_FORMAT_PRE \
-	_Pragma("GCC diagnostic push") \
-	_Pragma("GCC diagnostic ignored \"-Wformat=\"") \
+	_Pragma("GCC diagnostic ignored \"-Wformat\"") \
 	_Pragma("GCC diagnostic ignored \"-Wformat-extra-args\"")
 #define IGNORE_FORMAT_POST _Pragma("GCC diagnostic pop")
 #else
@@ -127,10 +120,11 @@ enum ELumpNum
 class FString
 {
 public:
-	FString () : Chars(&NullString.Nothing[0]) { NullString.RefCount++; }
+	FString () { ResetToNull(); }
 
 	// Copy constructors
 	FString (const FString &other) { AttachToOther (other); }
+	FString (FString &&other) : Chars(other.Chars) { other.ResetToNull(); }
 	FString (const char *copyStr);
 	FString (const char *copyStr, size_t copyLen);
 	FString (char oneChar);
@@ -172,6 +166,7 @@ public:
 	const char &operator[] (unsigned long long index) const { return Chars[index]; }
 
 	FString &operator = (const FString &other);
+	FString &operator = (FString &&other);
 	FString &operator = (const char *copyStr);
 
 	FString operator + (const FString &tail) const;
@@ -191,6 +186,9 @@ public:
 	FString &operator << (const char *tail) { return *this += tail; }
 	FString &operator << (char tail) { return *this += tail; }
 	FString &operator << (const FName &name) { return *this += name.GetChars(); }
+
+	const char &Front() const { assert(IsNotEmpty()); return Chars[0]; }
+	const char &Back() const { assert(IsNotEmpty()); return Chars[Len() - 1]; }
 
 	FString Left (size_t numChars) const;
 	FString Right (size_t numChars) const;
@@ -236,11 +234,45 @@ public:
 	void Insert (size_t index, const char *instr);
 	void Insert (size_t index, const char *instr, size_t instrlen);
 
+	template<typename Func>
+	void ReplaceChars (Func IsOldChar, char newchar)
+	{
+		size_t i, j;
+
+		LockBuffer();
+		for (i = 0, j = Len(); i < j; ++i)
+		{
+			if (IsOldChar(Chars[i]))
+			{
+				Chars[i] = newchar;
+			}
+		}
+		UnlockBuffer();
+	}
+
 	void ReplaceChars (char oldchar, char newchar);
 	void ReplaceChars (const char *oldcharset, char newchar);
 
+	template<typename Func>
+	void StripChars (Func IsKillChar)
+	{
+		size_t read, write, mylen;
+
+		LockBuffer();
+		for (read = write = 0, mylen = Len(); read < mylen; ++read)
+		{
+			if (!IsKillChar(Chars[read]))
+			{
+				Chars[write++] = Chars[read];
+			}
+		}
+		Chars[write] = '\0';
+		ReallocBuffer (write);
+		UnlockBuffer();
+	}
+
 	void StripChars (char killchar);
-	void StripChars (const char *killchars);
+	void StripChars (const char *killcharset);
 
 	void MergeChars (char merger);
 	void MergeChars (char merger, char newchar);
@@ -267,7 +299,8 @@ public:
 	bool IsEmpty() const { return Len() == 0; }
 	bool IsNotEmpty() const { return Len() != 0; }
 
-	void Truncate (long newlen);
+	void Truncate (size_t newlen);
+	void Remove(size_t index, size_t remlen);
 
 	int Compare (const FString &other) const { return strcmp (Chars, other.Chars); }
 	int Compare (const char *other) const { return strcmp (Chars, other); }
@@ -279,9 +312,26 @@ public:
 	int CompareNoCase(const FString &other, int len) const { return strnicmp(Chars, other.Chars, len); }
 	int CompareNoCase(const char *other, int len) const { return strnicmp(Chars, other, len); }
 
+	enum EmptyTokenType
+	{
+		TOK_SKIPEMPTY = 0,
+		TOK_KEEPEMPTY = 1,
+	};
+
+	TArray<FString> Split(const FString &delimiter, EmptyTokenType keepEmpty = TOK_KEEPEMPTY) const;
+	TArray<FString> Split(const char *delimiter, EmptyTokenType keepEmpty = TOK_KEEPEMPTY) const;
+	void Split(TArray<FString>& tokens, const FString &delimiter, EmptyTokenType keepEmpty = TOK_KEEPEMPTY) const;
+	void Split(TArray<FString>& tokens, const char *delimiter, EmptyTokenType keepEmpty = TOK_KEEPEMPTY) const;
+
 protected:
 	const FStringData *Data() const { return (FStringData *)Chars - 1; }
 	FStringData *Data() { return (FStringData *)Chars - 1; }
+
+	void ResetToNull()
+	{
+		NullString.RefCount++;
+		Chars = &NullString.Nothing[0];
+	}
 
 	void AttachToOther (const FString &other);
 	void AllocBuffer (size_t len);
@@ -297,16 +347,74 @@ protected:
 
 	friend struct FStringData;
 
+public:
+	bool operator == (const FString &other) const
+	{
+		return Compare(other) == 0;
+	}
+
+	bool operator != (const FString &other) const
+	{
+		return Compare(other) != 0;
+	}
+
+	bool operator < (const FString &other) const
+	{
+		return Compare(other) < 0;
+	}
+
+	bool operator > (const FString &other) const
+	{
+		return Compare(other) > 0;
+	}
+
+	bool operator <= (const FString &other) const
+	{
+		return Compare(other) <= 0;
+	}
+
+	bool operator >= (const FString &other) const
+	{
+		return Compare(other) >= 0;
+	}
+
+	bool operator == (const char *) const = delete;
+	bool operator != (const char *) const = delete;
+	bool operator <  (const char *) const = delete;
+	bool operator >  (const char *) const = delete;
+	bool operator <= (const char *) const = delete;
+	bool operator >= (const char *) const = delete;
+
+	bool operator == (FName) const = delete;
+	bool operator != (FName) const = delete;
+	bool operator <  (FName) const = delete;
+	bool operator >  (FName) const = delete;
+	bool operator <= (FName) const = delete;
+	bool operator >= (FName) const = delete;
+
 private:
-	// Prevent these from being called as current practices are to use Compare.
-	// Without this FStrings will be accidentally compared against char* ptrs.
-	bool operator == (const FString &illegal) const;
-	bool operator != (const FString &illegal) const;
-	bool operator < (const FString &illegal) const;
-	bool operator > (const FString &illegal) const;
-	bool operator <= (const FString &illegal) const;
-	bool operator >= (const FString &illegal) const;
 };
+
+bool operator == (const char *, const FString &) = delete;
+bool operator != (const char *, const FString &) = delete;
+bool operator <  (const char *, const FString &) = delete;
+bool operator >  (const char *, const FString &) = delete;
+bool operator <= (const char *, const FString &) = delete;
+bool operator >= (const char *, const FString &) = delete;
+
+bool operator == (FName, const FString &) = delete;
+bool operator != (FName, const FString &) = delete;
+bool operator <  (FName, const FString &) = delete;
+bool operator >  (FName, const FString &) = delete;
+bool operator <= (FName, const FString &) = delete;
+bool operator >= (FName, const FString &) = delete;
+
+class FStringf : public FString
+{
+public:
+	FStringf(const char *fmt, ...);
+};
+
 
 namespace StringFormat
 {
@@ -343,19 +451,17 @@ namespace StringFormat
 
 // FName inline implementations that take FString parameters
 
-inline FName::FName(const FString &text) { Index = NameData.FindName (text, text.Len(), false); }
-inline FName::FName(const FString &text, bool noCreate) { Index = NameData.FindName (text, text.Len(), noCreate); }
-inline FName &FName::operator = (const FString &text) { Index = NameData.FindName (text, text.Len(), false); return *this; }
-inline FName &FNameNoInit::operator = (const FString &text) { Index = NameData.FindName (text, text.Len(), false); return *this; }
+inline FName::FName(const FString &text) { Index = NameData.FindName (text.GetChars(), text.Len(), false); }
+inline FName::FName(const FString &text, bool noCreate) { Index = NameData.FindName (text.GetChars(), text.Len(), noCreate); }
+inline FName &FName::operator = (const FString &text) { Index = NameData.FindName (text.GetChars(), text.Len(), false); return *this; }
+inline FName &FNameNoInit::operator = (const FString &text) { Index = NameData.FindName (text.GetChars(), text.Len(), false); return *this; }
 
-// Hash for TMap
-extern unsigned int SuperFastHash(const char *data, size_t len);
+// Hash FStrings on their contents. (used by TMap)
+extern unsigned int SuperFastHash (const char *data, size_t len);
 template<> struct THashTraits<FString>
 {
-	hash_t Hash(const FString &key) { return (hash_t)SuperFastHash(key, key.Len()+1); }
-
+	hash_t Hash(const FString &key) { return (hash_t)SuperFastHash(key.GetChars(), key.Len()); }
 	// Compares two keys, returning zero if they are the same.
 	int Compare(const FString &left, const FString &right) { return left.Compare(right); }
 };
 
-#endif
